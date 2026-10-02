@@ -1,0 +1,17 @@
+# Every file here is text and is authored with LF, which the sibling `dsh-tabs`
+# project does for the same reason: without this, `core.autocrlf` decides per
+# machine, and a clone on Windows gets CRLF in the sources. That matters more
+# here than it looks — `Remote.kt` is a port of `dsh-tabs/src/remote.js` and is
+# meant to stay comparable with it line by line, and the desktop repository has a
+# suite that compares the two as text.
+* text=auto eol=lf
+
+# Gradle's wrapper is a shell script on POSIX and a batch file on Windows, and
+# both have to keep working from one checkout.
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+
+# Binary by nature; nothing should rewrite their bytes.
+*.png binary
+*.jar binary
+*.apk binary

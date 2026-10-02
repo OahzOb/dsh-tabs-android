@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+	<!-- The app talks to other machines' sshd. It never runs a Harness itself. -->
+	<uses-permission android:name="android.permission.INTERNET" />
+	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+	<application
+		android:name=".App"
+		android:allowBackup="false"
+		android:icon="@mipmap/ic_launcher"
+		android:label="@string/app_name"
+		android:networkSecurityConfig="@xml/network_security_config"
+		android:supportsRtl="true"
+		android:theme="@style/Theme.DshTabs"
+		android:usesCleartextTraffic="false">
+
+		<activity
+			android:name=".MainActivity"
+			android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+			android:exported="true"
+			android:launchMode="singleTask"
+			android:windowSoftInputMode="adjustResize">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+			</intent-filter>
+		</activity>
+
+		<!--
+			Keeping the tunnel alive while the screen is off needs a foreground
+			service, and the research is unambiguous about which type: `dataSync` is
+			capped at 6 hours per 24 on Android 15+, and `connectedDevice` demands
+			permissions that have nothing to do with an SSH connection. `specialUse`
+			is the only type with no runtime prerequisite.
+
+			The subtype property is required for this type on API 34+.
+		-->
+		<service
+			android:name=".SessionService"
+			android:exported="false"
+			android:foregroundServiceType="specialUse">
+			<property
+				android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+				android:value="Maintains a user-initiated SSH connection to a remote development machine and its port forwarding while the app is in the background." />
+		</service>
+	</application>
+
+</manifest>

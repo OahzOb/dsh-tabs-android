@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Two tabs on a dark bar: the app's whole idea, in one icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+	android:width="108dp"
+	android:height="108dp"
+	android:viewportWidth="108"
+	android:viewportHeight="108">
+	<path
+		android:fillColor="#5B9DFF"
+		android:pathData="M24,40 h22 a4,4 0 0 1 4,4 v20 a4,4 0 0 1 -4,4 h-22 a4,4 0 0 1 -4,-4 v-20 a4,4 0 0 1 4,-4 z" />
+	<path
+		android:fillColor="#4EC97A"
+		android:pathData="M62,40 h22 a4,4 0 0 1 4,4 v20 a4,4 0 0 1 -4,4 h-22 a4,4 0 0 1 -4,-4 v-20 a4,4 0 0 1 4,-4 z" />
+	<path
+		android:fillColor="#9A9AA4"
+		android:pathData="M24,32 h60 v4 h-60 z" />
+</vector>

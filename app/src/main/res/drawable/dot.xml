@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	One dot, four states, selected by the view's `state` tag through a selector. Kept
+	as a single selector rather than four drawables so a new state cannot be added
+	without deciding what it looks like.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+	<item android:state_selected="true" android:drawable="@drawable/dot_running" />
+	<item android:state_enabled="false" android:drawable="@drawable/dot_starting" />
+	<item android:state_activated="true" android:drawable="@drawable/dot_failed" />
+	<item android:drawable="@drawable/dot_idle" />
+</selector>

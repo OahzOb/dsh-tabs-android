@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Plain HTTP to the tunnel, and nothing else.
+
+	Two separate mechanisms are in play here and they are easy to conflate:
+
+	1. **Android's cleartext policy.** From API 28 the platform refuses cleartext by
+	   default, and WebView genuinely enforces it per host — a blocked navigation
+	   fails with no useful explanation. The `base-config` below keeps that default
+	   for the whole app, so the SSH connection itself and anything else stay
+	   encrypted-or-nothing, and the single `domain-config` re-opens exactly the
+	   loopback origin this app's own port forward serves.
+
+	2. **The web platform's "potentially trustworthy origin".** `http://127.0.0.1` is
+	   a secure context by definition, so `ws://` from a page on it is not mixed
+	   content and the modern browser APIs that require a secure context are
+	   available. That is a different mechanism from (1) and does not substitute for
+	   it: a loopback page can be both a secure context and refused by the policy.
+
+	`127.0.0.1` and `localhost` are both listed because `localhost` is a name, not
+	an address, and either can appear in a URL.
+-->
+<network-security-config>
+	<base-config cleartextTrafficPermitted="false" />
+
+	<domain-config cleartextTrafficPermitted="true">
+		<domain includeSubdomains="false">127.0.0.1</domain>
+		<domain includeSubdomains="false">localhost</domain>
+		<domain includeSubdomains="false">::1</domain>
+	</domain-config>
+</network-security-config>

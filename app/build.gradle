@@ -1,0 +1,182 @@
+plugins {
+	id 'com.android.application'
+	id 'org.jetbrains.kotlin.android'
+}
+
+// The release signing key, read from a file that is **not** in this repository.
+//
+// The key itself lives outside the tree (`C:\android-toolchain\dsh-tabs-release.jks`)
+// and `keystore.properties` — path, alias and passwords — is ignored, because a
+// committed signing key is a committed signing key whether or not the password is
+// beside it. The build stays usable without it: a missing file means the release
+// APK comes out unsigned, exactly as it did before, rather than failing.
+//
+// Rotation is not free. Android identifies an app by its signing key, so a different
+// key is a **different app**: it cannot update the old one, it has to be uninstalled
+// first, and that takes the device book and the app's own SSH key with it. See the
+// README's "Signing".
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+	keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+// `storeFile` is written relative to the *repository*, so `../android-toolchain/…`
+// escapes it — and `rootProject.file()` resolves against the repository's parent,
+// which lands in `C:\Projects\android-toolchain` and fails with "keystore file not
+// found". Resolve against the project root first, then fall back to the value as
+// given, which is what an absolute path needs.
+def keystoreFile = { String path ->
+	def candidate = rootProject.file(path)
+	return candidate.exists() ? candidate : new File(path)
+}
+
+// Repositories are declared once, in settings.gradle's pluginManagement and
+// dependencyResolutionManagement blocks. Declaring them here as well makes Gradle
+// warn that the settings ones are being ignored.
+
+android {
+	namespace 'dev.dshtabs'
+	compileSdk 36
+
+	defaultConfig {
+		applicationId 'dev.dshtabs'
+		// 34, not 26, and the reason is cryptography rather than fashion.
+		//
+		// Modern OpenSSH offers `ssh-ed25519` host keys and `curve25519-sha256` key
+		// exchange first. Android's platform only gained Ed25519 signatures and XDH at
+		// API 33, and JSch needs BouncyCastle — a large dependency — to cover either
+		// below that. The target device here runs API 36, so the floor is set where the
+		// platform already does the work and the app carries no crypto library of its
+		// own. See the README's "Why minSdk".
+		minSdk 34
+		targetSdk 36
+		versionCode 1
+		versionName '0.1.0'
+		testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+	}
+
+	signingConfigs {
+		// Only declared when the key is actually present, so a checkout without it can
+		// still run every task that does not sign anything.
+		if (keystorePropertiesFile.exists()) {
+			release {
+				storeFile keystoreFile(keystoreProperties['storeFile'])
+				storePassword keystoreProperties['storePassword']
+				keyAlias keystoreProperties['keyAlias']
+				keyPassword keystoreProperties['keyPassword']
+			}
+		}
+	}
+
+	buildTypes {
+		release {
+			minifyEnabled false
+			if (keystorePropertiesFile.exists()) signingConfig signingConfigs.release
+			proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+		}
+		debug {
+			// The whole point of the first milestone is a real device, so keep the
+			// debug build debuggable and installable side by side with nothing else.
+			applicationIdSuffix ''
+		}
+	}
+
+	compileOptions {
+		sourceCompatibility JavaVersion.VERSION_17
+		targetCompatibility JavaVersion.VERSION_17
+	}
+
+	kotlinOptions {
+		jvmTarget = '17'
+	}
+
+	buildFeatures {
+		viewBinding true
+		// Off by default since AGP 8, and MainActivity reads BuildConfig.DEBUG to decide
+		// whether WebView remote debugging is exposed.
+		buildConfig true
+	}
+
+	packaging {
+		resources {
+			excludes += [
+				'/META-INF/{AL2.0,LGPL2.1}',
+				// Two jars ship these same multi-release paths — JSch and BouncyCastle do
+				// not know about each other — and the merge fails on the collision. The
+				// version segment is a glob because they collide at 9, 11 and 15, and
+				// listing them one at a time means the next dependency adds a 17.
+				'/META-INF/versions/*/OSGI-INF/MANIFEST.MF',
+				// A signed jar's signature files must not end up in an APK: the APK is
+				// re-signed by the build, and the stale digests make the result
+				// uninstallable with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`.
+				'/META-INF/*.SF',
+				'/META-INF/*.DSA',
+				'/META-INF/*.RSA',
+				'/META-INF/MANIFEST.MF'
+			]
+		}
+	}
+}
+
+dependencies {
+	implementation 'androidx.core:core-ktx:1.13.1'
+	implementation 'androidx.appcompat:appcompat:1.7.0'
+	implementation 'com.google.android.material:material:1.12.0'
+	implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+	implementation 'androidx.webkit:webkit:1.12.1'
+	implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+
+	// The SSH client. Chosen over Apache MINA SSHD because this fork is the only one
+	// of the three that ships as a single self-contained jar with no mandatory
+	// dependencies, and because it exposes a byte[] private-key API — the key never
+	// has to exist as a file, which matters on a phone.
+	//
+	// The maintained fork, not `com.jcraft:jsch`: that one's last release was 2018.
+	implementation 'com.github.mwiede:jsch:2.28.7'
+
+	// **Required on Android, and this was measured rather than assumed.**
+	//
+	// JSch can only do Ed25519 through classes it ships under `META-INF/versions/15/`
+	// in a multi-release JAR, and Android's runtime does not implement multi-release
+	// JARs — it links the base class, whose constructor is
+	// `throw new UnsupportedOperationException("SignatureEd25519 requires Java15+")`.
+	//
+	// The consequence is not subtle. Measured on the target device against a real
+	// OpenSSH 9.5 server offering only `ssh-ed25519`:
+	//
+	//   Algorithm negotiation fail: algorithmName="server_host_key"
+	//     jschProposal="ecdsa-sha2-…,rsa-sha2-…"  serverProposal="ssh-ed25519"
+	//
+	// So this is not a duplicate of platform crypto. Android's provider does have
+	// Ed25519 from API 33 — the probe on the device reports it — but JSch has no way
+	// to reach it, because the class that would call it is the one Android refuses to
+	// load. BouncyCastle is the only route JSch has, and modern OpenSSH offers
+	// `ssh-ed25519` before anything else.
+	implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
+
+	// For the app's own SSH key: the private half is encrypted with a random
+	// passphrase, and the passphrase is held by a key in the Android Keystore. That
+	// keeps the key out of plain files without asking the operator for a password to
+	// unlock an app that is meant to connect on a tap.
+	implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+
+	// Runs on the build machine, and it is the one check that can: whether this
+	// client's program builders still produce the same bytes as the desktop client's.
+	// They are two implementations of one protocol, and nothing else notices when
+	// they stop agreeing — see `RemoteParityTest`.
+	testImplementation 'junit:junit:4.13.2'
+	// `org.json` is part of Android, not of the JVM. Without this the JVM test task
+	// gets the empty stub from `android.jar` and fails at runtime on the first call
+	// rather than at compile time. The app itself uses the platform's copy.
+	testImplementation 'org.json:json:20240303'
+
+	// Tests that must run **on the phone**, because what they test is the phone:
+	// whether JSch's key exchange, host key verification and ciphers work against a
+	// real OpenSSH server using Android's own crypto provider, and whether the
+	// platform can generate the key types this app needs. None of that can be
+	// answered by a JVM test on the build machine — the provider is the variable.
+	androidTestImplementation 'androidx.test:runner:1.6.2'
+	androidTestImplementation 'androidx.test:rules:1.6.1'
+	androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}

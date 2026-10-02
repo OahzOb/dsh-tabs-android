@@ -1,0 +1,43 @@
+# Gradle's build output and caches. Everything here is reproducible from the
+# checked-in build files, and `app/build/` alone reaches tens of megabytes.
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# The SDK location, which is different on every machine. Checked in, it breaks
+# everyone else's build; the README documents what it has to contain instead.
+local.properties
+
+# The release signing key's path, alias and passwords. The key itself lives outside
+# the tree; this file is what points at it. Ignored because a signing key that
+# reaches a repository has to be treated as compromised, and the password beside it
+# makes that worse rather than better.
+keystore.properties
+*.jks
+*.keystore
+
+# The ad-hoc toolchain this project was developed against, if anyone mirrors the
+# layout inside the tree.
+jdk17/
+gradle-8.9/
+dl/
+
+# Machine-local overrides, so a tracked file never carries one machine's paths.
+# `tools\android-env.ps1` sources this when it exists; that is where this checkout's
+# own SDK, JDK and local Gradle distribution are named.
+tools/android-env.local.ps1
+
+# Scratch from investigating a failure: a throwaway sshd config, a probe script,
+# a captured transcript. The leading slash anchors them to the project root so a
+# source directory could never be caught by accident.
+/tmp-sshd/
+/tmp-bridge/
+*.out
+*.err
+# Development screenshots of the app in use, kept out of the repository on purpose:
+# they show a real device book in the tab bar (label, host and user) and the phone's
+# own status bar. They are evidence for the verification table in the README, not
+# source, and they were moved beside the checkout. The directory is ignored rather
+# than its contents, so a capture run that re-creates it stays untracked too.
+.shots/

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<string name="app_name">dsh-tabs</string>
+
+	<!-- tab bar -->
+	<string name="add_device">Add machine</string>
+	<string name="no_devices">No machines yet.\n\nAdd one with the + button. A machine needs an SSH server and a Node-installed `dsh` on its PATH — the app never installs anything on it.</string>
+	<string name="connect">Connect</string>
+	<string name="disconnect">Disconnect</string>
+	<string name="retry">Try again</string>
+	<string name="remove">Remove</string>
+	<string name="cancel">Cancel</string>
+	<string name="save">Save</string>
+	<string name="connecting">Connecting…</string>
+	<string name="transcript">Transcript</string>
+	<string name="reconnecting">The server on %1$s stopped%2$s.\n\nStarting a new one — attempt %3$d of %4$d…</string>
+	<string name="reconnect_exhausted">The server on %1$s stopped %2$d times in a row%3$s, so this app has stopped trying. Tap Try again to start one by hand.</string>
+
+	<!-- the device dialog -->
+	<string name="field_label">label (e.g. box-b)</string>
+	<string name="field_host">host or address</string>
+	<string name="field_user">ssh user</string>
+	<string name="field_port">ssh port (22)</string>
+	<string name="field_directory">launch directory (optional, e.g. ~/work)</string>
+	<string name="field_password">password</string>
+	<string name="password_hint">The password is used for this connection only and is not stored. Install an SSH key on the machine for anything long-lived.</string>
+	<string name="add_title">Add a machine</string>
+	<string name="edit_title">Edit this machine</string>
+	<string name="remove_confirm">Remove this machine? Its tab and any connection are dropped. Nothing on the machine itself is touched.</string>
+	<string name="forget_hostkey">Forget the remembered host key</string>
+	<string name="hostkey_forgotten">The host key was forgotten. The next connection will trust whatever the machine presents.</string>
+	<string name="need_password">This machine has no SSH key on it yet, so it needs a password.</string>
+
+	<!-- the key dialog -->
+	<string name="key_manage">SSH key…</string>
+	<string name="key_none">No key yet. Connections use a password.</string>
+	<string name="key_ready">A key is ready. Connections use it and never ask for a password.</string>
+	<string name="key_title">This app\'s SSH key</string>
+	<string name="key_generate">Generate a key</string>
+	<string name="key_copy">Copy the public key</string>
+	<string name="key_replace">Replace it…</string>
+	<string name="key_howto">Add this line to ~/.ssh/authorized_keys on the machine, then connect. The private half never leaves this phone.\n\nOn an administrator account on Windows the file is %ProgramData%\\ssh\\administrators_authorized_keys instead, and its permissions have to be restricted to SYSTEM and Administrators or sshd ignores it.</string>
+	<string name="key_replace_confirm">Replace the key?\n\nEvery machine that already has the current public key in its authorized_keys will refuse this app until you paste the new one there. The old key cannot be removed for you — this app cannot reach into those files.</string>
+	<string name="key_copied">Public key copied</string>
+	<string name="key_generated">Key generated</string>
+	<string name="close">Close</string>
+	<string name="key_cannot_generate">The key could not be generated: %1$s</string>
+
+	<!-- notifications -->
+	<string name="notif_channel">Remote sessions</string>
+	<string name="notif_channel_desc">Keeps the SSH connection to a remote machine alive while the app is in the background.</string>
+	<string name="notif_title">Connected to %1$s</string>
+	<string name="notif_text">The Harness on %1$s stays reachable while this is showing.</string>
+</resources>

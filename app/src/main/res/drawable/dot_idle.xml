@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A connection is a real state machine, so the dot says which state it is in:
+     idle (dim), starting (amber, pulsing), running (green), failed (red). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+	android:shape="oval">
+	<solid android:color="@color/dim" />
+	<size
+		android:width="10dp"
+		android:height="10dp" />
+</shape>
