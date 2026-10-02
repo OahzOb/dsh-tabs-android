@@ -595,26 +595,39 @@ defaults are wrong for this machine and for this app:
 | `vm.heapSize` | `192M` | `512M` | the app's own heap, separate from `hw.ramSize` |
 | `hw.keyboard` | `no` | `yes` | type on the PC instead of a soft keyboard |
 
-**Running it needs WHPX, which needs a reboot that has not happened yet.**
-`HypervisorPlatform` and `VirtualMachinePlatform` were enabled with `dism`
-(package state `0x70` = Installed, and the `HvHost`/`vmic*` services now exist),
-and `RebootPending` is set — but until the machine restarts, `emulator
--accel-check` still reports:
+**Running it needs WHPX, and WHPX is now active.** `HypervisorPlatform` and
+`VirtualMachinePlatform` were enabled with `dism` and committed by a reboot.
+Before it, `emulator -accel-check` exited 6; after it:
 
 ```
-Android Emulator hypervisor driver is not installed on this machine
+accel:
+0
+WHPX(10.0.26300) is installed and usable.
+accel
 ```
 
-Note that message is misleading. It names the legacy AEHD driver, which is *not*
-what this setup uses and is not needed: with `HypervisorPlatform` enabled, the
-emulator uses WHPX instead. Check the reboot took effect with
-`(Get-CimInstance Win32_ComputerSystem).HypervisorPresent`, which must read
-`True`. If the emulator still refuses to accelerate after that, the remaining
-switch is `bcdedit /set hypervisorlaunchtype auto`, run elevated — the feature
-packages install fine without it, but the hypervisor will not start at boot.
+Verified end to end: the AVD booted Android 15, `adb install` succeeded, the app
+launched, and a screenshot came back at 2560x1600 with the UI drawn. Graphics run
+on the host GPU — `GLES: Google (Intel), Android Emulator OpenGL ES Translator
+(Intel(R) Arc(TM) B580 Graphics)`.
 
-The two `dism` commands and the `bcdedit` one need an elevated shell. Approval
-prompts are disabled in the assistant's session, so elevation is done by hand:
+Two things about this produce misleading messages, and both cost time if
+believed:
+
+- `emulator -accel-check` reporting *"Android Emulator hypervisor driver is not
+  installed"* names the **legacy AEHD driver**, which this setup does not use and
+  does not need — with `HypervisorPlatform` enabled the emulator uses WHPX. That
+  message appeared *after* the features were installed but *before* the reboot,
+  when it was true for the wrong reason.
+- **Feature package state does not prove the hypervisor is up.** Installing the
+  features reports success immediately, but the packages sit at `Install Pending`
+  (CBS `0x60`), not `Installed` (`0x70`), until the reboot commits them. The only
+  reliable check is
+  `(Get-CimInstance Win32_ComputerSystem).HypervisorPresent`, which must read
+  `True`.
+
+The `dism` and `bcdedit` commands need an elevated shell. Approval prompts are
+disabled in the assistant's session, so elevation is done by hand:
 `C:\android-toolchain\enable-hyperv.cmd` and
 `C:\android-toolchain\set-hypervisor-launch.cmd` each re-launch themselves via
 `Start-Process -Verb RunAs` and need one UAC click. The scheduled-task route
@@ -622,7 +635,8 @@ prompts are disabled in the assistant's session, so elevation is done by hand:
 `RunLevel Highest`) does **not** work here — both fail with "Access is denied",
 because creating a highest-run-level task is itself an administrator operation.
 `bcdedit` also rejects the `{current}` alias on this machine's localised
-Windows; enumerate with a bare `bcdedit /enum` instead.
+Windows; enumerate with a bare `bcdedit /enum` instead. In the end
+`hypervisorlaunchtype` needed no change — enabling the features set it.
 
 ## Signing, and why a debug install is not good enough
 
@@ -638,7 +652,7 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 ```
 
 The release signing key lives **outside** this repository, at
-`C:\android-toolchain\dsh-tabs-release.jks`, and `keystore.properties` — path, alias
+`C:\Users\74831\.android-keys\dsh-tabs-release.jks`, and `keystore.properties` — path, alias
 and passwords — is ignored by git. Both decisions are the same one: a signing key
 that reaches a repository has to be treated as compromised, and the password beside
 it makes that worse rather than better. The build works without the file; a missing
