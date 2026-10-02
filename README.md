@@ -1,30 +1,236 @@
 # dsh-tabs for Android
 
-A phone client for DSH Harness instances running on **other** machines, reached
-over SSH. It is the mobile counterpart of `../dsh-tabs`, built as a native
-Android app rather than a second Electron one.
+English | [中文](#中文)
 
-## What it is not
+A phone client for **DeepSeek Harness (DSH)** instances running on *other* machines,
+reached over SSH. One in-process SSH session per machine, one WebView per machine,
+and a tab bar that keeps several of them open at once.
 
-**It does not run a Harness.** There is no local tab, no embedded Node, and no
-`dsh` on the device. Every tab is a machine somewhere else. That is a deliberate
-scope decision, and it is also why this client is simpler than the desktop one
-rather than a port of it.
+**It does not run a Harness.** There is no local tab, no embedded Node, and no `dsh`
+on the device. Every tab is a machine somewhere else — which is also why this client
+is simpler than the desktop one rather than a port of it.
+
+---
+
+## Quick start
+
+1. **On the far machine:** an SSH server running, and `dsh` on `PATH` installed with
+   Node. The packaged Desktop application does *not* count: it ships its Harness
+   inside `app.asar` and installs no `dsh` command.
+2. **On the phone:** install the app, tap **`+`**, fill in host, user and — until the
+   app's key is on that machine — a password.
+3. **Tap the tab** to connect. The Harness's web interface opens in the tab.
+
+Do that once per machine and the tab bar remembers them.
 
 ## What it does
 
-Per machine, over one SSH connection:
+Per machine, over a single SSH connection:
 
-1. Run `dsh web --no-open --port 0` on the far side, so the *remote* OS picks a
-   free port and a connect can never collide with a server someone started by
-   hand.
-2. Read the port and session token back off the readiness line it prints.
-3. Forward a loopback port on the phone to that remote port, and point a WebView
-   at `http://127.0.0.1:<port>/?token=…`.
+1. Runs `dsh web --no-open --port 0` on the far side, so the *remote* OS picks a free
+   port and a connect can never collide with a server someone started by hand.
+2. Reads the port and session token back off the readiness line it prints.
+3. Forwards a loopback port on the phone to that remote port and points a WebView at
+   it.
 
-The token is a one-time entry ticket: the server answers with a signed cookie and
-a redirect to `./`, so the address bar ends up clean and every later reload uses
-the cookie. Verified against a real device — see "What was verified" below.
+The token is a one-time entry ticket: the server answers with a signed cookie and a
+redirect, so every later reload uses the cookie rather than the URL.
+
+## Features
+
+| | |
+| --- | --- |
+| **Several machines at once** | A tab per machine, each with its own SSH session, WebView and conversation. Switching tabs changes visibility and nothing else — the page is never reloaded, so a conversation is still there when you come back. |
+| **No Harness on the phone** | Nothing is installed on the target machine and nothing runs locally. The app starts the far side's own `dsh web` and forwards its port. |
+| **SSH key, or a password** | Generate the app's key once and paste one line into `authorized_keys`, or use a password for a one-off connection. A password is never stored. |
+| **Host keys are pinned** | Trust on first use, then verified on every later connect. A changed host key is refused, and you are told, rather than silently accepted. |
+| **Teardown that reaps** | Closing a tab stops the remote `dsh web` on the far side instead of leaving it holding the machine's resources. |
+| **Survives leaving the app** | A foreground service keeps the connection alive while you are in another app. |
+| **Automatic reconnect** | If the remote server goes away — a plugin edit restarts it, for instance — the tab says so and reconnects on its own, within a bounded number of attempts. |
+| **A readable failure** | A connect that fails shows the far side's own words, not just "connection failed". |
+
+## Requirements
+
+**The machine you connect to:** an SSH server, and `dsh` on `PATH` installed with
+Node. That is all — the app installs nothing there.
+
+**The phone:** Android 14 (API 34) or newer. The floor is cryptography rather than
+fashion: Ed25519 host keys and XDH key exchange are the modern defaults, and the
+platform only gained both at API 33. Raising the floor is what lets the app carry no
+crypto library of its own.
+
+## Install
+
+**From a release.** Download the APK from
+[Releases](https://github.com/OahzOb/dsh-tabs-android/releases) and install it.
+
+It is signed with the maintainer's own key, so it **cannot be installed over a build
+from anyone else** — Android identifies an app by its signing key, and a mismatch is
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Uninstall the old one first, which takes the
+device book and the app's SSH key with it.
+
+If `adb install` reports `INSTALL_FAILED_USER_RESTRICTED` on a Xiaomi device, that is
+MIUI blocking the *streamed* install path only; pushing the APK and installing from
+the device works.
+
+**From source.** You need JDK 17, the Android SDK with platform 36, and `adb`.
+Gradle comes with the wrapper:
+
+```
+.\gradlew.bat assembleRelease
+adb install -r app\build\outputs\apk\release\app-release.apk
+```
+
+Building it yourself means signing it with your own key, which is the right thing to
+do if you intend to keep it. See "Building" and "Signing" below.
+
+## Using it
+
+- **`+`** adds a machine. It needs a host, an SSH user, and — until the app's key is
+  on that machine — a password. A password is used for that connection and is
+  **never stored**; a wrong one is asked for again rather than retried.
+- **SSH key…** in the same dialog generates the app's own key and shows the line to
+  paste into that machine's `authorized_keys`. Once a machine has it, connecting
+  never asks for anything.
+- **Tap a tab** to connect it, or to bring it back if it is already up.
+- **`×`** disconnects. The tab stays, because a tab is a configured machine, not a
+  transient view.
+- **Long-press a tab** to edit or remove the machine.
+
+## Documentation
+
+The rest of this file is the engineering record: why the architecture is what it is,
+what was measured and how, and the failures that shaped it. It is long on purpose —
+each section is a decision that cost something to learn.
+
+| | |
+| --- | --- |
+| [Why the architecture is what it is](#why-the-architecture-is-what-it-is) | No embedded Node, one connection rather than two, the teardown contract |
+| [Layout](#layout) | Every file and what owns it |
+| [Building](#building) | The toolchain, the wrapper, the helper scripts, previews and the emulator |
+| [Signing](#signing-and-why-a-debug-install-is-not-good-enough) | Why a debug install is a security hole, not a convenience |
+| [The app's own SSH key](#the-apps-own-ssh-key) | Where it lives and what protects it |
+| [Diagnosing a connection](#diagnosing-a-connection) | What to look at when it will not connect |
+| [What was verified, and how](#what-was-verified-and-how) | The verification table |
+| [Known gaps](#known-gaps) | What it does not do yet |
+
+---
+
+<a id="中文"></a>
+# dsh-tabs 安卓端（中文）
+
+[English](#dsh-tabs-for-android) | 中文
+
+在手机上连接**其它机器**上运行的 **DeepSeek Harness (DSH)**，走 SSH。每台机器一条
+进程内 SSH 会话、一个 WebView，标签栏可以同时开着好几台。
+
+**它本身不跑 Harness。** 没有本地标签页，不内嵌 Node，设备上也没有 `dsh`。每个标签页
+都是别处的机器 —— 这也是它比桌面端简单、而不是桌面端的移植版的原因。
+
+---
+
+## 快速开始
+
+1. **目标机器**：跑着 SSH 服务，并且 `PATH` 上有用 Node 安装的 `dsh`。**打包的桌面应用
+   不算** —— 它的 Harness 装在 `app.asar` 里，不提供 `dsh` 命令。
+2. **手机**：装上应用，点 **`+`**，填主机、SSH 用户，以及密码（在把那台机器加上本应用的
+   公钥之前需要）。
+3. **点标签页**连接，Harness 的网页界面就会在标签里打开。
+
+每台机器做一次，之后标签栏会记住它们。
+
+## 它能做什么
+
+针对每台机器，只走**一条** SSH 连接：
+
+1. 在对端执行 `dsh web --no-open --port 0` —— 让**远端**系统自己挑一个空闲端口，所以
+   绝不会和谁手动起的服务撞端口。
+2. 从它打印的就绪行里读回端口和会话 token。
+3. 把手机上的一个回环端口转发到那个远端端口，让 WebView 打开它。
+
+token 是一次性的入场券：服务端回一个签名 cookie 并重定向，之后每次刷新都走 cookie 而不是
+URL。
+
+## 功能
+
+| | |
+| --- | --- |
+| **多台机器同时开** | 每台机器一个标签页，各自独立的 SSH 会话、WebView 和对话。切标签只改可见性、不重新加载页面，所以切回来对话还在。 |
+| **手机上不装任何东西** | 目标机器上不装东西，本地也不跑东西。应用只是启动对端自己的 `dsh web` 并转发端口。 |
+| **密钥或密码** | 生成一次应用自己的密钥，把一行粘进 `authorized_keys`；或者用密码做一次性连接。密码**从不保存**。 |
+| **主机密钥固定** | 首次信任，之后每次连接都校验。主机密钥变了会被拒绝并告知，而不是默默接受。 |
+| **关得干净** | 关标签页会停掉远端的 `dsh web`，不会留下进程占着那台机器的资源。 |
+| **切出去也不断** | 前台服务让连接在你用别的应用时保持存活。 |
+| **自动重连** | 远端服务消失时（比如改插件导致它重启），标签页会说原因并自行重连，重试次数有上限。 |
+| **失败能读懂** | 连接失败会显示对端自己的原话，而不是只给一句"连接失败"。 |
+
+## 环境要求
+
+**被连的机器**：一个 SSH 服务，以及 `PATH` 上用 Node 安装的 `dsh`。就这些 —— 应用不在
+那边装任何东西。
+
+**手机**：Android 14（API 34）或更新。这个下限是密码学决定的，不是赶时髦：Ed25519 主机
+密钥和 XDH 密钥交换是现在的默认值，而平台到 API 33 才同时具备两者。抬高下限正是这个应用
+能不带自己的加密库的原因。
+
+## 安装
+
+**用 Release。** 从 [Releases](https://github.com/OahzOb/dsh-tabs-android/releases) 下载
+APK 安装。
+
+它用维护者自己的密钥签名，所以**无法覆盖安装别人的构建** —— Android 用签名密钥识别应用，
+不匹配就会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。得先卸载旧版，而卸载会一并带走设备簿和
+应用自己的 SSH 密钥。
+
+小米设备上如果 `adb install` 报 `INSTALL_FAILED_USER_RESTRICTED`，那只是 MIUI 挡了**流式
+安装**这条路；先 push 再在设备上安装即可。
+
+**从源码构建。** 需要 JDK 17、带 platform 36 的 Android SDK、以及 `adb`。Gradle 由 wrapper
+自带：
+
+```
+.\gradlew.bat assembleRelease
+adb install -r app\build\outputs\apk\release\app-release.apk
+```
+
+自己构建就是用你自己的密钥签名 —— 如果你打算长期用，这是正确的做法。细节见下面的
+"Building" 与 "Signing"。
+
+## 用法
+
+- **`+`** 添加机器。需要主机、SSH 用户，以及密码（在那台机器上有本应用公钥之前）。密码只
+  用于这次连接、**从不保存**；密码错了会重新询问而不是反复重试。
+- 同一个对话框里的 **SSH key…** 生成应用自己的密钥，并给出要粘进那台机器
+  `authorized_keys` 的那一行。机器有了它之后，连接就不再问任何东西。
+- **点标签页**连接，或把它（已经连着的）调到前面。
+- **`×`** 断开。标签页保留 —— 标签页是一台配置好的机器，不是临时视图。
+- **长按标签页**编辑或删除这台机器。
+
+## 文档
+
+本文件其余部分是工程记录：架构为什么是这样、实测了什么、怎么测的，以及塑造了它的那些失败。
+它很长是有意的 —— 每一节都是一个花了代价才换来的决定。
+
+| | |
+| --- | --- |
+| [Why the architecture is what it is](#why-the-architecture-is-what-it-is) | 不内嵌 Node、一条连接而非两条、teardown 契约 |
+| [Layout](#layout) | 每个文件及其归属 |
+| [Building](#building) | 工具链、wrapper、helper 脚本、预览与模拟器 |
+| [Signing](#signing-and-why-a-debug-install-is-not-good-enough) | 为什么 debug 安装是安全漏洞而不是便利 |
+| [The app's own SSH key](#the-apps-own-ssh-key) | 密钥存在哪、靠什么保护 |
+| [Diagnosing a connection](#diagnosing-a-connection) | 连不上时该看什么 |
+| [What was verified, and how](#what-was-verified-and-how) | 验证记录表 |
+| [Known gaps](#known-gaps) | 目前还做不到什么 |
+
+> 技术细节一律以英文原文为准，中文部分不重复翻译，避免两份说明逐渐说不到一起去。
+
+---
+
+# The engineering record
+
+The sections below are in English only. They are the record of what was measured and
+why each decision is what it is; translating them would create two descriptions that
+drift apart, and the code and the tests only ever reference one.
 
 ## Why the architecture is what it is
 
@@ -456,24 +662,6 @@ Two details about `keystore.properties` that cost a build each:
 
   That only works while a debuggable build is installed, which is the one moment the
   book is easy to read — worth doing *before* the switch, not after.
-
-## Using it
-
-- **`+`** adds a machine. It needs a host, an SSH user, and — until the app's key is
-  on that machine — a password. A password is used for that connection and is
-  **never stored**; it is held in memory for the run and dropped when a connect
-  fails, so a wrong one is asked for again rather than retried.
-- **SSH key…** in the same dialog generates the app's own key and shows the line to
-  paste into `authorized_keys`. Once a machine has it, connecting never asks for
-  anything.
-- **Tap a tab** to connect it, or to bring it back if it is already up.
-- **`×`** disconnects. The tab stays, because a tab is a configured machine, not a
-  transient view — the same rule as the desktop app.
-- **Long-press a tab** to edit or remove the machine.
-
-The machine needs two things, and the app installs neither: an SSH server, and a
-Node-installed `dsh` on its `PATH`. The packaged Desktop application does not
-count — it ships its Harness inside `app.asar` and installs no `dsh` command.
 
 ## The app's own SSH key
 
