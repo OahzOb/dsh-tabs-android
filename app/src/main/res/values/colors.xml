@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<!-- The same palette the desktop tab bar uses, so the two clients look like one
+	     product rather than two projects. -->
+	<color name="bg">#16161A</color>
+	<color name="bar">#1D1D22</color>
+	<color name="tab">#26262C</color>
+	<color name="line">#33333B</color>
+	<color name="fg">#E6E6EA</color>
+	<color name="dim">#9A9AA4</color>
+	<color name="accent">#5B9DFF</color>
+	<color name="ok">#4EC97A</color>
+	<color name="warn">#E0A33E</color>
+	<color name="bad">#E2605E</color>
+	<color name="ic_launcher_background">#16161A</color>
+</resources>

@@ -1,0 +1,8 @@
+// The Android client for dsh-tabs: connect to other machines' Harness UIs over
+// SSH. There is deliberately no local Harness — see the README.
+//
+// Plugin resolution lives in settings.gradle's `pluginManagement` block, which is
+// where AGP's version is declared so the app module does not repeat it.
+plugins {
+	id 'com.android.application' apply false
+}

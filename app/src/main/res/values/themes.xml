@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<!-- A dark shell, because the Harness UI behind it is dark and a white flash on
+	     every launch is jarring on a phone. -->
+	<style name="Theme.DshTabs" parent="Theme.MaterialComponents.NoActionBar">
+		<item name="colorPrimary">@color/accent</item>
+		<item name="colorPrimaryVariant">@color/bar</item>
+		<item name="colorOnPrimary">@color/fg</item>
+		<item name="colorSecondary">@color/ok</item>
+		<item name="android:colorBackground">@color/bg</item>
+		<item name="android:windowBackground">@color/bg</item>
+		<item name="android:textColorPrimary">@color/fg</item>
+		<item name="android:textColorSecondary">@color/dim</item>
+		<item name="android:statusBarColor">@color/bar</item>
+		<item name="android:navigationBarColor">@color/bar</item>
+	</style>
+</resources>

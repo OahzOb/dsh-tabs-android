@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	One tab. The dot and the label are set from code because the dot's colour comes
+	from a state list driven by the connection state, not from a layout attribute.
+
+	The dot's background must be `@drawable/dot` — the **selector** — and not one of
+	the states it selects between. `MainActivity.renderTabs` sets `isSelected`,
+	`isEnabled` and `isActivated` on this view, and a selector is the only thing that
+	reads them; naming `@drawable/dot_idle` here instead makes the grey the whole
+	story and leaves `dot_running`, `dot_starting` and `dot_failed` unreachable, so a
+	connected tab keeps a grey dot and nothing in the layout looks wrong.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	android:layout_width="wrap_content"
+	android:layout_height="36dp"
+	android:layout_marginEnd="4dp"
+	android:background="?android:attr/selectableItemBackground"
+	android:clickable="true"
+	android:focusable="true"
+	android:gravity="center_vertical"
+	android:orientation="horizontal"
+	android:paddingStart="10dp"
+	android:paddingEnd="10dp">
+
+	<View
+		android:id="@+id/dot"
+		android:layout_width="10dp"
+		android:layout_height="10dp"
+		android:background="@drawable/dot" />
+
+	<TextView
+		android:id="@+id/label"
+		android:layout_width="wrap_content"
+		android:layout_height="wrap_content"
+		android:layout_marginStart="7dp"
+		android:ellipsize="end"
+		android:maxWidth="150dp"
+		android:singleLine="true"
+		android:textColor="@color/dim"
+		android:textSize="13sp" />
+
+	<TextView
+		android:id="@+id/close"
+		android:layout_width="22dp"
+		android:layout_height="22dp"
+		android:layout_marginStart="4dp"
+		android:background="?android:attr/selectableItemBackgroundBorderless"
+		android:clickable="true"
+		android:focusable="true"
+		android:gravity="center"
+		android:text="×"
+		android:textColor="@color/dim"
+		android:textSize="15sp" />
+</LinearLayout>
