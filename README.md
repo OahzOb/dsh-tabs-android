@@ -61,8 +61,9 @@ crypto library of its own.
 
 ## Install
 
-**From a release.** Download the APK from
-[Releases](https://github.com/OahzOb/dsh-tabs-android/releases) and install it.
+**From a release.** Download `dsh-tabs-android-<version>.apk` from
+[Releases](https://github.com/OahzOb/dsh-tabs-android/releases) and install it. The
+release notes carry the SHA-256 of what was published.
 
 It is signed with the maintainer's own key, so it **cannot be installed over a build
 from anyone else** — Android identifies an app by its signing key, and a mismatch is
