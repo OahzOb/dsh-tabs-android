@@ -5,7 +5,7 @@ plugins {
 
 // The release signing key, read from a file that is **not** in this repository.
 //
-// The key itself lives outside the tree (`C:\android-toolchain\dsh-tabs-release.jks`)
+// The key itself lives outside the tree (`C:\Users\74831\.android-keys\dsh-tabs-release.jks`)
 // and `keystore.properties` — path, alias and passwords — is ignored, because a
 // committed signing key is a committed signing key whether or not the password is
 // beside it. The build stays usable without it: a missing file means the release
