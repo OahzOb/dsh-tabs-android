@@ -376,24 +376,37 @@ records a failure that was paid for once already.
 ### The launcher icon
 
 ```
-design/ic_launcher.svg                            the icon as one picture, under three launcher masks
-app/src/main/res/drawable/ic_launcher_background.xml   the surface, and the shelf the tabs stand on
-app/src/main/res/drawable/ic_launcher_foreground.xml   two tabs, one of them live, and its state dot
+design/ic_launcher.svg                                 the icon as one picture, under three launcher masks
+app/src/main/res/drawable/ic_launcher_background.xml   the window's surface — a flat tile, and nothing else
+app/src/main/res/drawable/ic_launcher_foreground.xml   the window, its tab bar, and two machines on a dashed link
 ```
 
-The two layers are **one drawing split in half**, which is why the shelf is in the
-background and not in the foreground: a launcher masks each layer separately, and a
-full-bleed surface is the only way the bottom of the icon reaches the mask's edge
-instead of showing a gap. The numbers that have to keep agreeing are written in both
-files, and in the design SVG that draws the result: the shelf's top edge and the
-tabs' bottoms are both at y=66 of the 108dp canvas.
+The two layers are **one drawing split in half**. The background is a flat colour on
+purpose: a launcher masks each layer with a shape the application never sees — circle,
+squircle, rounded square — and a gradient or an edge would be cropped somewhere
+unpredictable, while a flat tile looks the same under all of them.
 
-The mark is scaled to the **safe zone** rather than to the canvas. A launcher is only
-obliged to keep the central 66dp circle of those 108dp, so the mark's outermost
-corner sits 31.4dp from the centre against the 33dp that circle allows — an icon
-drawn to look right in an editor is an icon with its corners cut off on a round
-launcher. The desktop client's `assets/icon.svg` is the same mark; the two are kept
-in step by hand.
+**The layout is the desktop icon's drawing, re-laid-out — not scaled.** A launcher is
+only obliged to keep the central 66dp circle of the 108dp canvas, so the mark has to
+fit inside it, and the desktop drawing runs corner to corner. Transposed straight down
+it would lose the outer corners of both machines; the version here moves them closer
+in and further apart, which turns a 56x34dp footprint into 50x48dp. A wide, short mark
+inside a circle wastes the top and bottom of every mask it is drawn under, and the
+measured cost of that is visible: the first attempt at this looked empty in all three
+previews. The furthest corner now sits 32.6dp from the centre against the 33dp the
+safe circle allows.
+
+Two consequences of the format are worth knowing before editing either file:
+
+- **A `VectorDrawable` path has no dash attribute.** There is no `strokeDashArray` in
+  the format, so each dash on the links is a separate `<path>` and each gap is a real
+  gap between two of them. The round caps are what make a short segment read as a dash.
+- **The tab bar is a filled shape, not a stroke**, for the same class of reason: a
+  2dp stroke is a hairline that a launcher's own scaling can drop.
+
+The desktop client's `assets/icon.svg` is the same drawing for a square canvas, where
+it can use the corners and where the small rungs come from a second file. The two are
+kept in step by hand.
 
 ### The parity test, which did not exist until it found two differences
 
