@@ -7,26 +7,28 @@
     and it is here so the next person to touch the icon can see what the two XML
     files add up to without building the app and installing it.
 
-    The numbers to keep in step, all in the 108dp adaptive-icon canvas:
-
-      * the shelf's top edge is y=66, and the tabs' bottoms are y=66;
-      * the mark's outermost corner is 31.4dp from the centre, inside the 33dp circle
-        a launcher promises to keep.
+    The mark is smaller than the canvas on purpose, and smaller than the desktop
+    client's. A launcher is only obliged to keep the central 66dp circle of the 108dp
+    canvas, so the drawing lives inside a 50x48dp box whose furthest corner is 32.6dp
+    from the centre; the rest of the canvas exists to be cropped. The desktop icon is
+    the same drawing laid out for a square canvas, where it can use the corners.
   -->
   <defs>
-    <linearGradient id="surface" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#26262f"/>
-      <stop offset="1" stop-color="#1d1d24"/>
-    </linearGradient>
     <clipPath id="circle"><circle cx="54" cy="54" r="36"/></clipPath>
     <clipPath id="squircle"><rect x="14" y="14" width="80" height="80" rx="24"/></clipPath>
     <clipPath id="rounded"><rect x="10" y="10" width="88" height="88" rx="14"/></clipPath>
     <g id="layers">
-      <rect width="108" height="108" fill="url(#surface)"/>
-      <rect x="0" y="66" width="108" height="42" fill="#34343f"/>
-      <path d="M27 47 a9 9 0 0 1 9 -9 h14 a9 9 0 0 1 9 9 v19 h-32 z" fill="#5b9dff"/>
-      <path d="M63 53 a7 7 0 0 1 7 -7 h4 a7 7 0 0 1 7 7 v13 h-18 z" fill="#61616f"/>
-      <circle cx="36" cy="46" r="4.6" fill="#7ef0a8"/>
+      <rect width="108" height="108" fill="#fbfbfb"/>
+      <g stroke="#31343c" stroke-width="6" stroke-linecap="round" fill="none">
+        <path d="M53 47 L56.5 44.5"/>
+        <path d="M58 43.5 L61.5 41"/>
+        <path d="M53 61 L56.5 63.5"/>
+        <path d="M58 65.5 L61.5 68"/>
+      </g>
+      <path d="M34 41 h10 a8 8 0 0 1 8 8 v10 a8 8 0 0 1 -8 8 h-10 a8 8 0 0 1 -8 -8 v-10 a8 8 0 0 1 8 -8 z" fill="#31343c"/>
+      <path d="M35 47 h8 a3 3 0 0 1 0 6 h-8 a3 3 0 0 1 0 -6 z" fill="#fbfbfb"/>
+      <path d="M68 30 h2 a6 6 0 0 1 6 6 v2 a6 6 0 0 1 -6 6 h-2 a6 6 0 0 1 -6 -6 v-2 a6 6 0 0 1 6 -6 z" fill="#b6bbc4"/>
+      <path d="M68 64 h2 a6 6 0 0 1 6 6 v2 a6 6 0 0 1 -6 6 h-2 a6 6 0 0 1 -6 -6 v-2 a6 6 0 0 1 6 -6 z" fill="#dcdfe4"/>
     </g>
   </defs>
 

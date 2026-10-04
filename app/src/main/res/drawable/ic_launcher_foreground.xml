@@ -1,17 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Foreground layer of the adaptive icon: two tabs and the state dot, and nothing
-    else. The window they sit in is the background layer next to this one.
+    Foreground layer of the adaptive icon: this machine's window with its tab bar, a
+    broken link out to two more machines, and nothing else. The tile is the background
+    layer next to this one.
 
-    The drawing is not free to fill the canvas. A launcher keeps only the central
-    66dp of the 108dp canvas — the rest is there to be masked — so the mark is scaled
-    to fit that circle: the live tab's outer corner sits 31.4dp from the centre
-    against the 33dp the safe circle allows. An icon drawn at the size that looks
-    right in an editor is an icon with its corners cut off on a round launcher.
+    **The layout is not the desktop icon's, and it cannot be.** A launcher only
+    promises the central 66dp of the 108dp canvas, so the mark has to fit inside that
+    circle: the desktop drawing occupies its canvas corner to corner, and scaled
+    straight down it would lose the outer corners of both machines. What is here is
+    the same drawing re-laid-out for a circle rather than a square — the machines
+    moved closer in and further apart, so the mark's footprint is 50x48dp instead of
+    the 56x34dp a straight transposition gives. A wide, short mark inside a circle
+    wastes the top and bottom of every mask it is drawn under.
 
-    Geometry is the desktop icon's, scaled: `assets/icon.svg` in the sibling
-    repository is the source, and `design/ic_launcher.svg` here is the two layers
-    composited and drawn to the same proportions.
+    **The links are drawn as separate segments, not as a dashed stroke.** A
+    `VectorDrawable` path has no dash attribute — there is no `strokeDashArray` in the
+    format — so each gap is a real gap between two paths. The round caps are what make
+    a short segment read as a dash rather than as a broken line.
+
+    Geometry, in the 108dp canvas, with the furthest corner 32.6dp from the centre
+    against the 33dp the safe circle allows:
+
+      window   26x26 at (26,41)   tab bar 14x6 at (32,47)
+      machine  14x14 at (62,30)   machine 14x14 at (62,64)
+
+    `design/ic_launcher.svg` at the repository root draws these two layers composited,
+    under three of the masks a launcher may apply.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
 	android:width="108dp"
@@ -19,19 +33,43 @@
 	android:viewportWidth="108"
 	android:viewportHeight="108">
 
-	<!-- The live tab: rounded top, square bottom, standing on the shelf. -->
+	<!-- The link up and to the right: two segments with a gap between them. -->
 	<path
-		android:fillColor="#5B9DFF"
-		android:pathData="M27,47 a9,9 0 0 1 9,-9 h14 a9,9 0 0 1 9,9 v19 h-32 z" />
+		android:pathData="M53,47 L56.5,44.5"
+		android:strokeColor="#31343C"
+		android:strokeWidth="6"
+		android:strokeLineCap="round" />
+	<path
+		android:pathData="M58,43.5 L61.5,41"
+		android:strokeColor="#31343C"
+		android:strokeWidth="6"
+		android:strokeLineCap="round" />
 
-	<!-- A second one, shorter, so the mark says there is more than one tab. -->
+	<!-- The link down and to the right. -->
 	<path
-		android:fillColor="#61616F"
-		android:pathData="M63,53 a7,7 0 0 1 7,-7 h4 a7,7 0 0 1 7,7 v13 h-18 z" />
+		android:pathData="M53,61 L56.5,63.5"
+		android:strokeColor="#31343C"
+		android:strokeWidth="6"
+		android:strokeLineCap="round" />
+	<path
+		android:pathData="M58,65.5 L61.5,68"
+		android:strokeColor="#31343C"
+		android:strokeWidth="6"
+		android:strokeLineCap="round" />
 
-	<!-- The state dot, nested in the live tab's corner arc: its centre is the arc's
-	     centre, so it sits in the corner rather than near it. -->
+	<!-- This machine: a window with a tab bar in it. -->
 	<path
-		android:fillColor="#7EF0A8"
-		android:pathData="M36,41.4 a4.6,4.6 0 1 0 0,9.2 a4.6,4.6 0 1 0 0,-9.2 z" />
+		android:fillColor="#31343C"
+		android:pathData="M34,41 h10 a8,8 0 0 1 8,8 v10 a8,8 0 0 1 -8,8 h-10 a8,8 0 0 1 -8,-8 v-10 a8,8 0 0 1 8,-8 z" />
+	<path
+		android:fillColor="#FBFBFB"
+		android:pathData="M35,47 h8 a3,3 0 0 1 0,6 h-8 a3,3 0 0 1 0,-6 z" />
+
+	<!-- The other machines. -->
+	<path
+		android:fillColor="#B6BBC4"
+		android:pathData="M68,30 h2 a6,6 0 0 1 6,6 v2 a6,6 0 0 1 -6,6 h-2 a6,6 0 0 1 -6,-6 v-2 a6,6 0 0 1 6,-6 z" />
+	<path
+		android:fillColor="#DCDFE4"
+		android:pathData="M68,64 h2 a6,6 0 0 1 6,6 v2 a6,6 0 0 1 -6,6 h-2 a6,6 0 0 1 -6,-6 v-2 a6,6 0 0 1 6,-6 z" />
 </vector>

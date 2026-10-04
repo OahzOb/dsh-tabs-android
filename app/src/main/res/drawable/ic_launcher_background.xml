@@ -1,35 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Background layer of the adaptive icon: the window's surface, with the shelf the
-    tabs stand on. Full bleed on purpose — the launcher's mask is what shapes it, and
-    a layer that stops short of the edge shows the mask's own background through the
-    gap on a round launcher.
+    Background layer of the adaptive icon: the window's own surface, nothing else.
 
-    The shelf starts at 66dp, which is exactly where the tabs in the foreground layer
-    end: the two layers are one drawing split in half, so that number appears in both
-    files and has to keep agreeing.
+    It is a flat colour on purpose. A launcher masks this layer with a shape the
+    application never sees — circle, squircle, rounded square — and a gradient or an
+    edge would be cropped somewhere unpredictable; a flat tile is the one background
+    that looks the same under all of them. The value is the DeepSeek Harness desktop
+    icon's own tile, read out of its pixels.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
 	android:width="108dp"
 	android:height="108dp"
 	android:viewportWidth="108"
 	android:viewportHeight="108">
-
-	<path android:pathData="M0,0 h108 v108 h-108 z">
-		<aapt:attr xmlns:aapt="http://schemas.android.com/aapt" name="android:fillColor">
-			<gradient
-				android:startX="0"
-				android:startY="0"
-				android:endX="0"
-				android:endY="108"
-				android:type="linear">
-				<item android:offset="0" android:color="#26262F" />
-				<item android:offset="1" android:color="#1D1D24" />
-			</gradient>
-		</aapt:attr>
-	</path>
-
 	<path
-		android:fillColor="#34343F"
-		android:pathData="M0,66 h108 v42 h-108 z" />
+		android:fillColor="#FBFBFB"
+		android:pathData="M0,0 h108 v108 h-108 z" />
 </vector>
