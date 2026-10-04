@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 132" width="340" height="132">
+  <!--
+    The launcher icon as one picture, at the size it is drawn: the two layers that
+    `drawable/ic_launcher_background.xml` and `drawable/ic_launcher_foreground.xml`
+    hold, composited, and then shown under three of the masks a launcher may apply.
+    This file is the design, not a resource — nothing in the application reads it —
+    and it is here so the next person to touch the icon can see what the two XML
+    files add up to without building the app and installing it.
+
+    The numbers to keep in step, all in the 108dp adaptive-icon canvas:
+
+      * the shelf's top edge is y=66, and the tabs' bottoms are y=66;
+      * the mark's outermost corner is 31.4dp from the centre, inside the 33dp circle
+        a launcher promises to keep.
+  -->
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26262f"/>
+      <stop offset="1" stop-color="#1d1d24"/>
+    </linearGradient>
+    <clipPath id="circle"><circle cx="54" cy="54" r="36"/></clipPath>
+    <clipPath id="squircle"><rect x="14" y="14" width="80" height="80" rx="24"/></clipPath>
+    <clipPath id="rounded"><rect x="10" y="10" width="88" height="88" rx="14"/></clipPath>
+    <g id="layers">
+      <rect width="108" height="108" fill="url(#surface)"/>
+      <rect x="0" y="66" width="108" height="42" fill="#34343f"/>
+      <path d="M27 47 a9 9 0 0 1 9 -9 h14 a9 9 0 0 1 9 9 v19 h-32 z" fill="#5b9dff"/>
+      <path d="M63 53 a7 7 0 0 1 7 -7 h4 a7 7 0 0 1 7 7 v13 h-18 z" fill="#61616f"/>
+      <circle cx="36" cy="46" r="4.6" fill="#7ef0a8"/>
+    </g>
+  </defs>
+
+  <g transform="translate(8,12)"><g clip-path="url(#circle)"><use href="#layers"/></g></g>
+  <g transform="translate(124,12)"><g clip-path="url(#squircle)"><use href="#layers"/></g></g>
+  <g transform="translate(240,12)"><g clip-path="url(#rounded)"><use href="#layers"/></g></g>
+</svg>

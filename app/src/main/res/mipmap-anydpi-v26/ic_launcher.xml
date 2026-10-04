@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-	<background android:drawable="@color/ic_launcher_background" />
+	<!-- Both layers are drawings rather than a colour and a drawing: the surface and
+	     the tabs are one picture, and the shelf the tabs stand on has to line up with
+	     them across the split. See the two files in `drawable/`. -->
+	<background android:drawable="@drawable/ic_launcher_background" />
 	<foreground android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>

@@ -373,6 +373,28 @@ app/src/main/java/dev/dshtabs/
 `Remote.kt` is a **port**, and its comments were ported with it, because each one
 records a failure that was paid for once already.
 
+### The launcher icon
+
+```
+design/ic_launcher.svg                            the icon as one picture, under three launcher masks
+app/src/main/res/drawable/ic_launcher_background.xml   the surface, and the shelf the tabs stand on
+app/src/main/res/drawable/ic_launcher_foreground.xml   two tabs, one of them live, and its state dot
+```
+
+The two layers are **one drawing split in half**, which is why the shelf is in the
+background and not in the foreground: a launcher masks each layer separately, and a
+full-bleed surface is the only way the bottom of the icon reaches the mask's edge
+instead of showing a gap. The numbers that have to keep agreeing are written in both
+files, and in the design SVG that draws the result: the shelf's top edge and the
+tabs' bottoms are both at y=66 of the 108dp canvas.
+
+The mark is scaled to the **safe zone** rather than to the canvas. A launcher is only
+obliged to keep the central 66dp circle of those 108dp, so the mark's outermost
+corner sits 31.4dp from the centre against the 33dp that circle allows — an icon
+drawn to look right in an editor is an icon with its corners cut off on a round
+launcher. The desktop client's `assets/icon.svg` is the same mark; the two are kept
+in step by hand.
+
 ### The parity test, which did not exist until it found two differences
 
 This README used to say that `../dsh-tabs/tools/parity.mjs` ran both clients over
