@@ -12,5 +12,7 @@
 	<color name="ok">#4EC97A</color>
 	<color name="warn">#E0A33E</color>
 	<color name="bad">#E2605E</color>
-	<color name="ic_launcher_background">#16161A</color>
+	<!-- The launcher icon's own two colours live in `drawable/ic_launcher_background.xml`
+	     and `drawable/ic_launcher_foreground.xml`, not here: they are drawings, and the
+	     shelf in one has to line up with the tabs in the other. -->
 </resources>

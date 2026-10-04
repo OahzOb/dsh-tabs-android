@@ -1,17 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Two tabs on a dark bar: the app's whole idea, in one icon. -->
+<!--
+    Foreground layer of the adaptive icon: two tabs and the state dot, and nothing
+    else. The window they sit in is the background layer next to this one.
+
+    The drawing is not free to fill the canvas. A launcher keeps only the central
+    66dp of the 108dp canvas — the rest is there to be masked — so the mark is scaled
+    to fit that circle: the live tab's outer corner sits 31.4dp from the centre
+    against the 33dp the safe circle allows. An icon drawn at the size that looks
+    right in an editor is an icon with its corners cut off on a round launcher.
+
+    Geometry is the desktop icon's, scaled: `assets/icon.svg` in the sibling
+    repository is the source, and `design/ic_launcher.svg` here is the two layers
+    composited and drawn to the same proportions.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
 	android:width="108dp"
 	android:height="108dp"
 	android:viewportWidth="108"
 	android:viewportHeight="108">
+
+	<!-- The live tab: rounded top, square bottom, standing on the shelf. -->
 	<path
 		android:fillColor="#5B9DFF"
-		android:pathData="M24,40 h22 a4,4 0 0 1 4,4 v20 a4,4 0 0 1 -4,4 h-22 a4,4 0 0 1 -4,-4 v-20 a4,4 0 0 1 4,-4 z" />
+		android:pathData="M27,47 a9,9 0 0 1 9,-9 h14 a9,9 0 0 1 9,9 v19 h-32 z" />
+
+	<!-- A second one, shorter, so the mark says there is more than one tab. -->
 	<path
-		android:fillColor="#4EC97A"
-		android:pathData="M62,40 h22 a4,4 0 0 1 4,4 v20 a4,4 0 0 1 -4,4 h-22 a4,4 0 0 1 -4,-4 v-20 a4,4 0 0 1 4,-4 z" />
+		android:fillColor="#61616F"
+		android:pathData="M63,53 a7,7 0 0 1 7,-7 h4 a7,7 0 0 1 7,7 v13 h-18 z" />
+
+	<!-- The state dot, nested in the live tab's corner arc: its centre is the arc's
+	     centre, so it sits in the corner rather than near it. -->
 	<path
-		android:fillColor="#9A9AA4"
-		android:pathData="M24,32 h60 v4 h-60 z" />
+		android:fillColor="#7EF0A8"
+		android:pathData="M36,41.4 a4.6,4.6 0 1 0 0,9.2 a4.6,4.6 0 1 0 0,-9.2 z" />
 </vector>
