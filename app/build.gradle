@@ -21,7 +21,7 @@ if (keystorePropertiesFile.exists()) {
 	keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
 }
 
-// `storeFile` is written relative to the *repository*, so `../android-toolchain/…`
+// `storeFile` is written relative to the *repository*, so `../<keys-dir>/…`
 // escapes it — and `rootProject.file()` resolves against the repository's parent
 // rather than the project root, which lands outside the checkout and fails with
 // "keystore file not found" naming a path nobody wrote. Resolve against the project

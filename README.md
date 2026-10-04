@@ -690,8 +690,8 @@ of failing.
 Two details about `keystore.properties` that cost a build each:
 
 - **`storeFile` is absolute.** AGP resolves a relative value against the Gradle
-  *daemon's* working directory rather than the project root, so `../android-toolchain/…`
-  resolves to `~/.gradle/daemon/8.9/android-toolchain/…` and the build fails with
+  *daemon's* working directory rather than the project root, so `../<keys-dir>/…`
+  resolves to `~/.gradle/daemon/8.9/<keys-dir>/…` and the build fails with
   "keystore file not found" naming a path nobody wrote.
 - **A different key is a different app.** Android identifies an app by its signing
   key, so a release build cannot update a debug install, or another machine's release
