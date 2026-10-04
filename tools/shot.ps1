@@ -40,14 +40,29 @@ param(
     [string]$Label,
     [switch]$NoLaunch,
     [int]$SettleMs = 2500,
-    [int]$CompositeWidth = 900
+    [int]$CompositeWidth = 900,
+    # Which device to photograph. With both the tablet and an emulator attached,
+    # "the first one adb lists" is a coin toss, and picking wrong silently
+    # produces a picture of the wrong thing.
+    [string]$Serial
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'android-env.ps1')
 
-$serial = Get-AndroidDevice
-if (-not $serial) { exit 1 }
+if ($Serial) {
+    $present = & adb devices 2>&1 | Select-Object -Skip 1 | Where-Object { $_ -match '^\S+\s+device' } |
+        ForEach-Object { ($_ -split '\s+')[0] }
+    if ($present -notcontains $Serial) {
+        Write-Warning "No device with serial '$Serial'. Attached: $($present -join ', ')"
+        exit 1
+    }
+} else {
+    $Serial = Get-AndroidDevice
+}
+if (-not $Serial) { exit 1 }
+$serial = $Serial
+Write-Host "Device  : $serial"
 
 $repo = Split-Path $PSScriptRoot -Parent
 $shotDir = Join-Path $repo '.shots'

@@ -41,7 +41,10 @@ param(
     [switch]$Shot,
     [string]$Label,
     [switch]$Offline,
-    [switch]$Clean
+    [switch]$Clean,
+    # Target device for -Install/-Shot. Needed once an emulator and a real
+    # device are both attached; without it the emulator wins by default.
+    [string]$Serial
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,18 +88,18 @@ try {
 
     if (-not $Install) { return }
 
-    $serial = Get-AndroidDevice
-    if (-not $serial) { exit 1 }
+    $target = if ($Serial) { $Serial } else { Get-AndroidDevice }
+    if (-not $target) { exit 1 }
 
-    Write-Host "Installing on $serial ..."
+    Write-Host "Installing on $target ..."
     # -r replaces in place. The app keeps its data, which is the difference
     # between "test the change" and "start over from an empty device book".
-    & adb -s $serial install -r $apk
+    & adb -s $target install -r $apk
     if ($LASTEXITCODE -ne 0) { throw "adb install failed" }
 
     if ($Shot) {
         Write-Host ""
-        & (Join-Path $PSScriptRoot 'shot.ps1') -AppId 'dev.dshtabs' -Label $Label
+        & (Join-Path $PSScriptRoot 'shot.ps1') -AppId 'dev.dshtabs' -Label $Label -Serial $target
     }
 }
 finally {
