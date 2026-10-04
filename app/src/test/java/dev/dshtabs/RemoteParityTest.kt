@@ -251,8 +251,8 @@ class RemoteParityTest {
 		// whole test exists to make impossible. These are the properties the fragments
 		// were standing in for, now named as properties.
 		val required = listOf(
-			// The teardown contract: stdin is held, and the tree is killed rather than
-			// the shim, because an npm global install puts `node` one level down.
+			// The teardown contract: stdin is held, and the whole tree is killed rather
+			// than the one process, because the Harness is free to spawn under it.
 			"[Console]::In.ReadToEnd()",
 			"taskkill /PID \$proc.Id /T /F",
 			// stdout is inherited, never redirected: a temp file would make the
@@ -261,6 +261,11 @@ class RemoteParityTest {
 			// The two additions, each a failure this client paid for.
 			"Join-Path \$shimDir 'node.exe'",
 			"node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
+			// Whatever the shim's directory holds, the launcher starts the interpreter
+			// on `bin.js` or refuses by name. There is no `.cmd` shim fallback left to
+			// take: starting the shim is the failure the resolution exists to avoid,
+			// and starting nothing would run `node web --no-open --port 0`.
+			"\$binJs does not exist",
 			"[Console]::Error.WriteLine(\"launch node=",
 			"[Diagnostics.Stopwatch]::StartNew()",
 			"-lt 60",
