@@ -5,11 +5,11 @@ plugins {
 
 // The release signing key, read from a file that is **not** in this repository.
 //
-// The key itself lives outside the tree (`C:\Users\74831\.android-keys\dsh-tabs-release.jks`)
-// and `keystore.properties` — path, alias and passwords — is ignored, because a
-// committed signing key is a committed signing key whether or not the password is
-// beside it. The build stays usable without it: a missing file means the release
-// APK comes out unsigned, exactly as it did before, rather than failing.
+// The key itself lives outside the tree, under a directory of its own (see the
+// README's "Signing"), and `keystore.properties` — path, alias and passwords — is
+// ignored, because a committed signing key is a committed signing key whether or not
+// the password is beside it. The build stays usable without it: a missing file means
+// the release APK comes out unsigned, exactly as it did before, rather than failing.
 //
 // Rotation is not free. Android identifies an app by its signing key, so a different
 // key is a **different app**: it cannot update the old one, it has to be uninstalled
@@ -22,10 +22,11 @@ if (keystorePropertiesFile.exists()) {
 }
 
 // `storeFile` is written relative to the *repository*, so `../android-toolchain/…`
-// escapes it — and `rootProject.file()` resolves against the repository's parent,
-// which lands in `C:\Projects\android-toolchain` and fails with "keystore file not
-// found". Resolve against the project root first, then fall back to the value as
-// given, which is what an absolute path needs.
+// escapes it — and `rootProject.file()` resolves against the repository's parent
+// rather than the project root, which lands outside the checkout and fails with
+// "keystore file not found" naming a path nobody wrote. Resolve against the project
+// root first, then fall back to the value as given, which is what an absolute path
+// needs.
 def keystoreFile = { String path ->
 	def candidate = rootProject.file(path)
 	return candidate.exists() ? candidate : new File(path)

@@ -480,12 +480,16 @@ was developed on keeps its toolchain unpacked in a directory of its own and name
 paths in `tools\android-env.local.ps1`, which git ignores:
 
 ```
-C:\android-toolchain\jdk17            Temurin JDK 17
-C:\android-toolchain\gradle-8.9       Gradle 8.9 (AGP 8.7.3 requires 8.9+)
-C:\android-toolchain\android-studio   Android Studio 2026.2.1 (Rabbit 1)
-C:\android-toolchain\scrcpy           scrcpy 4.1, live device mirroring
-C:\android-sdk                        command-line tools, platform 36, build-tools 36.0.0
+<toolchain>\jdk17            Temurin JDK 17
+<toolchain>\gradle-8.9       Gradle 8.9 (AGP 8.7.3 requires 8.9+)
+<toolchain>\android-studio   Android Studio 2026.2.1 (Rabbit 1)
+<toolchain>\scrcpy           scrcpy 4.1, live device mirroring
+<android-sdk>                command-line tools, platform 36, build-tools 36.0.0
 ```
+
+`<toolchain>` and `<android-sdk>` stand in for whatever directories that file names
+on your machine. The real names are deliberately left out here, for the same reason
+the file itself is ignored.
 
 Those paths are on that machine's user `PATH` as well. Nothing in the build depends
 on them: the local file exists so that no *tracked* file has to carry one machine's
@@ -500,24 +504,48 @@ globally installed `gradle.bat`, because the wrapper pins the version to the
 project. The distribution is extracted into `~\.gradle\wrapper\dists` on first use,
 so the first build needs a network and later ones do not.
 
-**On the machine this was developed on the official URL does not work.** TLS to
-`services.gradle.org` fails there through a local proxy, while `dl.google.com`,
-`repo1.maven.org` and `github.com` all succeed through that same proxy, and
-`gradle wrapper` refuses to write the URL at all: `Test of distribution url …
-failed`. That is a property of the machine, not of the project, so the override
-lives in `tools\android-env.local.ps1` (ignored by git) rather than in the tracked
-properties file:
+**The official URL is committed; a machine that cannot reach it overrides locally.**
+TLS to `services.gradle.org` failed through this project's development proxy at the
+time, while `dl.google.com`, `repo1.maven.org` and `github.com` all succeeded through
+that same proxy, and `gradle wrapper` refused to write the URL at all: `Test of
+distribution url … failed`. That is a property of one machine, not of the project, so
+it does not belong in a tracked file — a pin to a path that exists on one machine is
+not a default, it is a break waiting for the first person who clones this.
 
-```powershell
-$env:GRADLE_DISTRIBUTION_URL = 'file:/C:/android-toolchain/gradle-8.9-bin.zip'
-```
+Gradle's wrapper reads `distributionUrl` from `gradle-wrapper.properties` and honours
+**no environment variable** for it, so there is no override to set — an earlier version
+of this section claimed `GRADLE_DISTRIBUTION_URL` did that, and it does not; the
+wrapper jar contains no such name. The workarounds are therefore local by nature:
 
-Gradle's wrapper honours that variable over `distributionUrl`. If you take the same
-route, one packing detail bites: build the zip with `bsdtar`, **not**
+- **Leave the edit uncommitted.** Point `distributionUrl` at a zip you unpacked
+  yourself, build, and never commit that line. `git update-index --skip-worktree
+  gradle\wrapper\gradle-wrapper.properties` keeps it out of your diffs while the file
+  keeps the portable value in the repository.
+- **Pre-seed the cache instead of downloading.** The wrapper extracts into
+  `~\.gradle\wrapper\dists\gradle-8.9-bin\<hash>\`, where `<hash>` is the MD5 of the
+  `distributionUrl` string rendered in base 36, and it downloads nothing when the
+  distribution is already there. The official URL hashes to
+  `90cnw93cvbtalezasaz0blq0a`, so a local `gradle-8.9-bin.zip` copied to
+
+  ```powershell
+  $d = "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.9-bin\90cnw93cvbtalezasaz0blq0a"
+  New-Item -ItemType Directory -Path $d -Force | Out-Null
+  Copy-Item <your>\gradle-8.9-bin.zip $d
+  ```
+
+  is unpacked on the next `.\gradlew.bat` with no network at all. This is the route to
+  prefer, because it leaves every tracked file portable and touches nothing in the
+  repository.
+
+One packing detail bites either way: build the zip with `bsdtar`, **not**
 `Compress-Archive`. The latter omits directory entries, and the wrapper's unzip then
 fails with `Could not unzip … (The system cannot find the path specified)` on the
 first file — `tar -a -c -f gradle-8.9-bin.zip gradle-8.9` from the parent directory
-produces an archive Java can read.
+produces an archive Java can read. A correctly built `gradle-8.9-bin.zip` is
+136,135,026 bytes over 305 entries and starts with a `gradle-8.9/` directory entry;
+its SHA-256 is `A4004742E8DE74A6CB564CA792E0A228A2686AFF7EE628DC733799D0933F99A5`.
+The official archive is 136,114,148 bytes — a few kilobytes smaller, because the two
+were not produced by the same packer, so compare entry structure rather than size.
 
 The wrapper jar is the one Gradle itself embeds, as entry `gradle-wrapper.jar`
 inside `gradle-<ver>\lib\plugins\gradle-wrapper-main-<ver>.jar`. Merging
@@ -567,7 +595,7 @@ which renders layouts and Composables **on the host**, so the preview does not
 need the device, an emulator, or an unlock. Launch the IDE with:
 
 ```
-C:\android-toolchain\android-studio\bin\studio64.exe
+<toolchain>\android-studio\bin\studio64.exe
 ```
 
 ### The emulator
@@ -628,8 +656,8 @@ believed:
 
 The `dism` and `bcdedit` commands need an elevated shell. Approval prompts are
 disabled in the assistant's session, so elevation is done by hand:
-`C:\android-toolchain\enable-hyperv.cmd` and
-`C:\android-toolchain\set-hypervisor-launch.cmd` each re-launch themselves via
+`<toolchain>\enable-hyperv.cmd` and
+`<toolchain>\set-hypervisor-launch.cmd` each re-launch themselves via
 `Start-Process -Verb RunAs` and need one UAC click. The scheduled-task route
 (`schtasks /create /rl HIGHEST`, or `Register-ScheduledTask` with
 `RunLevel Highest`) does **not** work here — both fail with "Access is denied",
@@ -651,10 +679,10 @@ extras can reach — this app's real private key is one of them.
 adb install -r app\build\outputs\apk\release\app-release.apk
 ```
 
-The release signing key lives **outside** this repository, at
-`C:\Users\74831\.android-keys\dsh-tabs-release.jks`, and `keystore.properties` — path, alias
-and passwords — is ignored by git. Both decisions are the same one: a signing key
-that reaches a repository has to be treated as compromised, and the password beside
+The release signing key lives **outside** this repository, under a directory of its
+own, pointed at by `%USERPROFILE%\.android-keys\<name>.jks` in `keystore.properties`.
+That file — path, alias and passwords — is ignored by git. Both decisions are the same
+one: a signing key that reaches a repository has to be treated as compromised, and the password beside
 it makes that worse rather than better. The build works without the file; a missing
 `keystore.properties` produces an unsigned release APK, exactly as before, instead
 of failing.
