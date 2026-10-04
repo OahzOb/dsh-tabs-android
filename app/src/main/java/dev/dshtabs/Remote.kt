@@ -240,7 +240,13 @@ object Remote {
 		parts += "\$node = 'FALLBACK'"
 		parts += "\$shimDir = Split-Path -Parent \$dsh"
 		parts += "\$binJs = Join-Path \$shimDir 'node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'"
-		parts += "if (-not (Test-Path -LiteralPath \$binJs)) { \$binJs = \$dsh }"
+		// A missing `bin.js` used to fall back to `$dsh` itself, and that cannot work
+		// here: the launcher always starts `$node`, so no script would be named and
+		// `node web --no-open --port 0` would exit on `Cannot find module …\web`,
+		// blaming the wrong thing. Refused by name instead. Reachable wherever the
+		// shim's own directory carries no `node_modules\@deepseek-ai\dsh` — a pnpm
+		// global install, or a `dsh` shimmed in from somewhere else, among them.
+		parts += "if (-not (Test-Path -LiteralPath \$binJs)) { [Console]::Error.WriteLine(\"dsh is at \$dsh, but \$binJs does not exist; this launcher starts node on bin.js rather than the .cmd shim, so bin.js has to sit in the node_modules beside the shim\"); exit 127 }"
 		// The interpreter is looked for in the shim's own directory first, because an npm
 		// global install puts `node.exe` there; `%ProgramFiles%\nodejs` is the ordinary
 		// install, and the bare name is the last resort. Each candidate is tested before
@@ -263,8 +269,9 @@ object Remote {
 			parts += "\$dir = ${windowsLiteral(dir)}; if (\$dir -eq '~') { \$dir = \$env:USERPROFILE } elseif (\$dir.StartsWith('~/') -or \$dir.StartsWith('~\\')) { \$dir = Join-Path \$env:USERPROFILE \$dir.Substring(2) }; \$null = 0"
 			parts += "Set-Location -LiteralPath \$dir -ErrorAction Stop"
 		}
-		parts += "\$argv = @()"
-		parts += "if (\$binJs -ne \$dsh) { \$argv += \$binJs }"
+		// The script is named first and always: `$binJs` is the only thing this
+		// launcher starts, and the check above guarantees it exists.
+		parts += "\$argv = @(\$binJs)"
 		parts += "\$argv += @('web','--no-open','--port','0')"
 		// Write the resolution to stderr before starting anything, so it cannot be
 		// mistaken for the readiness line, which the client reads from stdout. Naming
