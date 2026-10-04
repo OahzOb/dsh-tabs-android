@@ -611,6 +611,19 @@ in one command:
 .\tools\shot.ps1 -NoLaunch                  # capture without launching the app
 ```
 
+With more than one device attached the target is a choice rather than a fact:
+"the first one `adb` lists" changes with the order the transports come up, and
+the wrong pick installs onto the wrong device or photographs it without saying
+so. Both scripts prefer an **emulator** when there is one — it is the device
+that cannot be locked, which is what makes it usable for a capture run — print
+which one they chose and what else was attached, and take `-Serial` to override
+that. `shot.ps1` refuses a serial that is not attached instead of falling back
+to whichever device it finds:
+
+```
+.\tools\build.ps1 -Install -Shot -Label 06-tabs -Serial emulator-5554
+```
+
 `shot.ps1` writes to `.shots\`, alongside a `<label>.small.png` scaled down for
 sharing. It wakes the screen first, and **reports mean brightness** so a black
 frame cannot pass silently — `screencap` succeeds on a sleeping or locked device

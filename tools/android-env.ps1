@@ -62,17 +62,31 @@ function global:Test-AndroidEnv {
 function global:Get-AndroidDevice {
 	<#
 	.SYNOPSIS
-		Return the serial of the single attached device, or $null with a message.
+		Pick a device serial, preferring an emulator when several are attached.
+
+	.DESCRIPTION
+		With only one device attached this is unambiguous. With two, "the first
+		one adb lists" is a coin toss between the tablet and the emulator, and
+		choosing wrong installs onto or photographs the wrong target without
+		saying so. The emulator wins the tie because it is the one that cannot
+		be locked, which is what makes it useful for screenshots.
 	#>
 	$lines = & adb devices 2>&1 | Select-Object -Skip 1 | Where-Object { $_ -match '\S' }
-	$ready = @($lines | Where-Object { $_ -match '\sdevice\s*$' })
+	$ready = @($lines | Where-Object { $_ -match '\sdevice\s*$' } | ForEach-Object { ($_ -split '\s+')[0] })
 	if ($ready.Count -eq 0) {
 		Write-Warning "No device is in the 'device' state. Attach one and check 'adb devices'."
 		if ($lines) { $lines | ForEach-Object { Write-Host "    $_" } }
 		return $null
 	}
-	if ($ready.Count -gt 1) { Write-Warning "More than one device attached; take the first." }
-	return ($ready[0] -split '\s+')[0]
+	if ($ready.Count -eq 1) { return $ready[0] }
+
+	$emu = $ready | Where-Object { $_ -like 'emulator-*' }
+	if ($emu) {
+		Write-Host "  ($($ready.Count) devices attached; using emulator $($emu[0]) of: $($ready -join ', '))"
+		return $emu[0]
+	}
+	Write-Warning "More than one device attached and none is an emulator; take the first. Pass -Serial to choose."
+	return $ready[0]
 }
 
 # --- local override -------------------------------------------------------
