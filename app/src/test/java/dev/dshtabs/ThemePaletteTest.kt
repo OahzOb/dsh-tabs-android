@@ -56,9 +56,17 @@ class ThemePaletteTest {
 		return file.readText()
 	}
 
-	/** `name -> #RRGGBB` for one colour file. */
+	/**
+	 * `name -> #RRGGBB(AA)` for one colour file.
+	 *
+	 * The name class is deliberately wider than the palette uses today, and the value
+	 * class accepts the eight-digit form with alpha. A shape this expression does not
+	 * understand is a colour that ends up in *neither* map — so the comparison below
+	 * would pass by not seeing it. `every colour in the file is read by this test` is
+	 * the guard that stops that happening quietly.
+	 */
 	private fun palette(relative: String): Map<String, String> =
-		Regex("""<color\s+name="([a-z_]+)"\s*>\s*(#[0-9A-Fa-f]{6})\s*</color>""")
+		Regex("""<color\s+name="([A-Za-z0-9_]+)"\s*>\s*(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?)\s*</color>""")
 			.findAll(read(relative))
 			.associate { it.groupValues[1] to it.groupValues[2].uppercase() }
 
@@ -68,9 +76,14 @@ class ThemePaletteTest {
 	 * The gamma step is not optional — a naive average of the channels rates
 	 * `#5B9DFF` on white as acceptable, and this is the formula a contrast checker
 	 * uses, so it is the one to hold the palette to.
+	 *
+	 * An eight-digit value carries alpha, which this ignores: the last six digits are
+	 * the colour. A translucent surface is a decision this palette does not make
+	 * anywhere, and if one ever appears, the ratio here is the one against its own
+	 * colour — which is the useful number to have printed in a failure either way.
 	 */
 	private fun luminance(hex: String): Double {
-		val digits = hex.removePrefix("#")
+		val digits = hex.removePrefix("#").takeLast(6)
 		val channels = (0 until 3).map { index ->
 			val value = digits.substring(index * 2, index * 2 + 2).toInt(16) / 255.0
 			if (value <= 0.03928) value / 12.92 else ((value + 0.055) / 1.055).pow(2.4)
@@ -104,6 +117,29 @@ class ThemePaletteTest {
 		"light" to palette("values/colors.xml"),
 		"dark" to palette("values-night/colors.xml")
 	)
+
+	@Test
+	fun `every colour in the file is read by this test`() {
+		// **A guard on the guard.** The two checks below can only compare colours they
+		// can parse, so a name or a value shape the expression above does not match is
+		// invisible to both: it is missing from its own map, and two maps missing the
+		// same entry are still equal. Counting elements instead of trusting the
+		// expression is what turns "these two agree" into "these two agree about
+		// everything in the file".
+		for ((mode, file) in listOf("light" to "values/colors.xml", "dark" to "values-night/colors.xml")) {
+			val text = read(file)
+			val declared = Regex("""<color\b""").findAll(text).count()
+			val parsed = palette(file).size
+			assertEquals(
+				"the $mode palette declares $declared <color> elements and this test parsed " +
+					"$parsed of them. A colour it cannot parse is absent from both maps, so " +
+					"the name and contrast checks pass while saying nothing about it",
+				declared,
+				parsed
+			)
+			assertTrue("the $mode palette declares no colours at all", declared > 0)
+		}
+	}
 
 	@Test
 	fun `both modes define the same colour names`() {

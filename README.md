@@ -456,7 +456,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 12 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 17 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
