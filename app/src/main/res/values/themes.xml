@@ -1,17 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-	<!-- A dark shell, because the Harness UI behind it is dark and a white flash on
-	     every launch is jarring on a phone. -->
-	<style name="Theme.DshTabs" parent="Theme.MaterialComponents.NoActionBar">
+	<!-- The shell follows the system's light/dark setting. It used to be dark in both,
+	     on the argument that the Harness UI behind it is dark and a white flash on
+	     every launch is jarring — but that made a phone in light mode the only one of
+	     the two clients that ignores the setting, and the flash it avoided is one frame
+	     of `windowBackground` before the page paints. Reported from use.
+
+	     **`DayNight` is what does the work**: the palette is split across `values/` and
+	     `values-night/`, and a `uiMode` change re-resolves every `@color/…` in the
+	     layouts. The activity is *not* recreated for it — `uiMode` is in its
+	     `configChanges` — so `MainActivity.applyChromeColors` repaints the views that
+	     were inflated with the old values. See that method for why recreation is not
+	     the fix.
+
+	     `android:windowLightStatusBar` is bound to `?android:attr/isLightTheme` instead
+	     of being restated in a `values-night` copy of this style: a duplicated style is
+	     one edit away from the two modes disagreeing about an attribute nobody looks at
+	     twice. Colours get two files because they differ in every token; this differs in
+	     two flags and they both follow the same attribute. -->
+	<style name="Theme.DshTabs" parent="Theme.MaterialComponents.DayNight.NoActionBar">
 		<item name="colorPrimary">@color/accent</item>
 		<item name="colorPrimaryVariant">@color/bar</item>
-		<item name="colorOnPrimary">@color/fg</item>
+		<item name="colorOnPrimary">@color/on_accent</item>
 		<item name="colorSecondary">@color/ok</item>
+		<!-- What a dialog is drawn on. Left to the Material default it would be the
+		     library's own grey in both modes, one step away from the tab bar it opens
+		     over; naming `bar` keeps the two clients' surfaces the same colour as each
+		     other and as the rest of this window. -->
+		<item name="colorSurface">@color/bar</item>
 		<item name="android:colorBackground">@color/bg</item>
 		<item name="android:windowBackground">@color/bg</item>
 		<item name="android:textColorPrimary">@color/fg</item>
 		<item name="android:textColorSecondary">@color/dim</item>
 		<item name="android:statusBarColor">@color/bar</item>
 		<item name="android:navigationBarColor">@color/bar</item>
+		<item name="android:windowLightStatusBar">?android:attr/isLightTheme</item>
+		<item name="android:windowLightNavigationBar">?android:attr/isLightTheme</item>
 	</style>
 </resources>

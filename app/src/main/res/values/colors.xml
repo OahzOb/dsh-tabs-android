@@ -1,17 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-	<!-- The same palette the desktop tab bar uses, so the two clients look like one
-	     product rather than two projects. -->
-	<color name="bg">#16161A</color>
-	<color name="bar">#1D1D22</color>
-	<color name="tab">#26262C</color>
-	<color name="line">#33333B</color>
-	<color name="fg">#E6E6EA</color>
-	<color name="dim">#9A9AA4</color>
-	<color name="accent">#5B9DFF</color>
-	<color name="ok">#4EC97A</color>
-	<color name="warn">#E0A33E</color>
-	<color name="bad">#E2605E</color>
+	<!-- The same palette the desktop tab bar uses, in the mode the system is in:
+	     this file is the light one and `values-night/colors.xml` is the dark one.
+
+	     **The two files have to define the same names.** A colour added here and
+	     forgotten there does not fail to build — it silently keeps its light value
+	     in the dark, which is a white panel in a dark window. `ThemePaletteTest`
+	     compares the two name sets and checks the contrast of every pair that text
+	     or a state dot is drawn in, so that mistake and an unreadable colour are
+	     both caught on the build machine rather than on the phone. -->
+	<color name="bg">#FAFAFC</color>
+	<color name="bar">#EDEDF2</color>
+	<color name="tab">#E3E3EA</color>
+	<color name="line">#CFCFD8</color>
+	<color name="fg">#1A1A20</color>
+	<color name="dim">#5B5B66</color>
+	<!-- The accent is **deeper here than in the dark theme, and that is measured
+	     rather than taste.** This colour is not only a button's fill: the Material
+	     theme also draws a dialog's buttons in it, as text, on the surface. `#5B9DFF`
+	     on a light surface is 2.4:1 and unreadable, which is why the light theme
+	     cannot reuse the dark one's accent. This one is 4.8:1 as text on `bar` (the
+	     surface a dialog is drawn on), 5.3:1 on `bg`, and 5.5:1 as a fill under
+	     `on_accent`. -->
+	<color name="accent">#2A63CC</color>
+	<color name="on_accent">#FFFFFF</color>
+	<!-- State colours, drawn as the tab's dot on the bar. They are held to 3:1
+	     against `bar` — the non-text threshold — because a dot is not a word. -->
+	<color name="ok">#1B8A4B</color>
+	<color name="warn">#9A6200</color>
+	<color name="bad">#C0392B</color>
 	<!-- The launcher icon's own two colours live in `drawable/ic_launcher_background.xml`
 	     and `drawable/ic_launcher_foreground.xml`, not here: they are drawings, and the
 	     shelf in one has to line up with the tabs in the other. -->

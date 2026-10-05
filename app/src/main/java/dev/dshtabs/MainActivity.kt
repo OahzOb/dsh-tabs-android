@@ -3,6 +3,8 @@ package dev.dshtabs
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -22,6 +24,7 @@ import android.widget.Toast
 import androidx.annotation.MainThread
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -140,6 +143,9 @@ class MainActivity : AppCompatActivity() {
 		WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 		findViewById<ImageButton>(R.id.add).setOnClickListener { showDeviceDialog(null) }
 		applyWindowInsets()
+		// Called at startup as well as on a mode change, so the two paths cannot
+		// disagree about what this window looks like. See `applyChromeColors`.
+		applyChromeColors()
 
 		loadBook()
 		render()
@@ -296,6 +302,91 @@ class MainActivity : AppCompatActivity() {
 			insets
 		}
 		ViewCompat.requestApplyInsets(root)
+	}
+
+	/**
+	 * Paint the window from the palette the current system mode selects.
+	 *
+	 * The palette is split across `values/` and `values-night/`, so every `@color/…`
+	 * a layout names resolves differently in the two modes — but only when something
+	 * resolves it again. A view inflated from XML keeps the colour it was born with,
+	 * and this activity declares `uiMode` in its `configChanges` (which is what keeps
+	 * a mode switch from throwing the WebViews away), so the platform hands over
+	 * `onConfigurationChanged` instead of rebuilding the window. The tab row is the
+	 * one thing that looks after itself, because `renderTabs` inflates it per render.
+	 *
+	 * **Recreating the activity is not the alternative.** It re-inflates everything
+	 * for free and takes the WebViews with it, and the remote Harness is a
+	 * single-page application: a reload is a lost conversation, which is the failure
+	 * this window is built around avoiding.
+	 *
+	 * Called from `onCreate` too, so a freshly launched window and one that has just
+	 * changed mode are painted by the same statements rather than by two mechanisms
+	 * that happen to agree today.
+	 */
+	private fun applyChromeColors() {
+		val bg = getColor(R.color.bg)
+		val bar = getColor(R.color.bar)
+		val fg = getColor(R.color.fg)
+		val dim = getColor(R.color.dim)
+
+		findViewById<View>(R.id.root).setBackgroundColor(bg)
+		findViewById<View>(R.id.bar).setBackgroundColor(bar)
+		findViewById<ImageButton>(R.id.add).setColorFilter(dim)
+
+		panelTitle.setTextColor(fg)
+		panelReason.setTextColor(dim)
+		panelTranscriptLabel.setTextColor(dim)
+		panelTranscript.setTextColor(dim)
+		panelTranscript.setBackgroundColor(bar)
+
+		// The action button is a `MaterialButton`: it reads `colorPrimary` and
+		// `colorOnPrimary` in its constructor, so it is the one view that would keep
+		// the *other* mode's colours — including the accent, which is deliberately not
+		// the same blue in both palettes. Setting the tint list replaces the colour
+		// and keeps the shape and its ripple.
+		ViewCompat.setBackgroundTintList(panelAction, ColorStateList.valueOf(getColor(R.color.accent)))
+		panelAction.setTextColor(getColor(R.color.on_accent))
+
+		// A live page paints its own background; this one shows before the document
+		// paints, and around a page shorter than the window.
+		for (entry in views.values) entry.view.setBackgroundColor(bg)
+
+		applySystemBars()
+	}
+
+	/**
+	 * The two system bars, which invert with the shell.
+	 *
+	 * The **icons** are the part that matters — dark icons on a light bar and the
+	 * reverse. The bar colours themselves come from the theme and are a no-op on
+	 * API 35+, where every app is drawn edge to edge and what shows behind the clock
+	 * is this window's own background: `applyWindowInsets` is what keeps the first row
+	 * out from under it.
+	 */
+	private fun applySystemBars() {
+		val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+			Configuration.UI_MODE_NIGHT_YES
+		@Suppress("DEPRECATION")
+		window.statusBarColor = getColor(R.color.bar)
+		@Suppress("DEPRECATION")
+		window.navigationBarColor = getColor(R.color.bar)
+		WindowCompat.getInsetsController(window, window.decorView).apply {
+			isAppearanceLightStatusBars = !night
+			isAppearanceLightNavigationBars = !night
+		}
+	}
+
+	/**
+	 * Where a light/dark switch arrives, because `uiMode` is in this activity's
+	 * `configChanges`. The other configurations that land here — rotation, screen
+	 * size, the keyboard — repaint the same way, which is harmless: both calls are
+	 * idempotent and neither touches a session.
+	 */
+	override fun onConfigurationChanged(newConfig: Configuration) {
+		super.onConfigurationChanged(newConfig)
+		applyChromeColors()
+		render()
 	}
 
 	@SuppressLint("SetJavaScriptEnabled")

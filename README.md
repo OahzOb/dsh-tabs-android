@@ -48,6 +48,7 @@ redirect, so every later reload uses the cookie rather than the URL.
 | **Survives leaving the app** | A foreground service keeps the connection alive while you are in another app. |
 | **Automatic reconnect** | If the remote server goes away — a plugin edit restarts it, for instance — the tab says so and reconnects on its own, within a bounded number of attempts. |
 | **A readable failure** | A connect that fails shows the far side's own words, not just "connection failed". |
+| **Follows the system theme** | The shell is light or dark with the system setting, from `values/` and `values-night/` palettes. The two files are held to the same colour names and to contrast floors on the build machine (`ThemePaletteTest`), because a colour that is unreadable in one mode builds, renders and ships. The Harness UI behind the shell has its own theme and is unaffected — a light shell can hold a dark page. |
 
 ## Requirements
 
