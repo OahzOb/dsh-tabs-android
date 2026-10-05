@@ -704,6 +704,16 @@ class MainActivity : AppCompatActivity() {
 		val existing = views[showing.device.id]
 		val view = existing?.takeIf { it.url == session.url }?.view ?: run {
 			val created = WebView(this)
+			// The shell's own colour, which shows for the moment before the remote page
+			// paints. It used to be a guess about a mismatch that mostly is not one: the
+			// Harness follows the same system setting this shell does, so both are light or
+			// both are dark — measured on the device, in both modes, and visible in
+			// `.shots/theme-light.png` and `.shots/theme-dark.png` next to the app's own
+			// chrome. A Harness pinned to the other theme by its own settings is the one case
+			// where a flash remains, and it is a frame or two of the shell's colour rather
+			// than the "seconds of a light panel" a review of this line once predicted. If it
+			// ever needs fixing, the place is a spinner held until `onPageCommitVisible`, not
+			// a different colour here.
 			created.setBackgroundColor(getColor(R.color.bg))
 			configureWebView(created, originOf(session.url))
 			webHost.addView(
