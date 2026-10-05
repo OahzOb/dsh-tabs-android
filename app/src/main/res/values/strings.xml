@@ -16,6 +16,10 @@
 	<string name="reconnecting">The server on %1$s stopped%2$s.\n\nStarting a new one — attempt %3$d of %4$d…</string>
 	<string name="reconnect_exhausted">The server on %1$s stopped %2$d times in a row%3$s, so this app has stopped trying. Tap Try again to start one by hand.</string>
 
+	<!-- the renderer dying: the page is gone, the SSH connection is not -->
+	<string name="renderer_crashed">The page for %1$s crashed its renderer. The connection to that machine is still up — Try again loads the page over it.</string>
+	<string name="renderer_killed">The system reclaimed memory by killing the page for %1$s. The connection to that machine is still up — Try again loads the page over it.</string>
+
 	<!-- the device dialog -->
 	<string name="field_label">label (e.g. box-b)</string>
 	<string name="field_host">host or address</string>
