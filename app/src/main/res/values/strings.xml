@@ -6,7 +6,6 @@
 	<string name="add_device">Add machine</string>
 	<string name="no_devices">No machines yet.\n\nAdd one with the + button. A machine needs an SSH server and a Node-installed `dsh` on its PATH — the app never installs anything on it.</string>
 	<string name="connect">Connect</string>
-	<string name="disconnect">Disconnect</string>
 	<string name="retry">Try again</string>
 	<string name="remove">Remove</string>
 	<string name="cancel">Cancel</string>
@@ -16,9 +15,9 @@
 	<string name="reconnecting">The server on %1$s stopped%2$s.\n\nStarting a new one — attempt %3$d of %4$d…</string>
 	<string name="reconnect_exhausted">The server on %1$s stopped %2$d times in a row%3$s, so this app has stopped trying. Tap Try again to start one by hand.</string>
 
-	<!-- the renderer dying: the page is gone, the SSH connection is not -->
-	<string name="renderer_crashed">The page for %1$s crashed its renderer. The connection to that machine is still up — Try again loads the page over it.</string>
-	<string name="renderer_killed">The system reclaimed memory by killing the page for %1$s. The connection to that machine is still up — Try again loads the page over it.</string>
+	<!-- the renderer dying: the page is gone, and so is the session behind it -->
+	<string name="renderer_crashed">The page for %1$s crashed its renderer. Tap Try again to connect to that machine afresh.</string>
+	<string name="renderer_killed">The system reclaimed memory by killing the page for %1$s. Tap Try again to connect to that machine afresh.</string>
 
 	<!-- the device dialog -->
 	<string name="field_label">label (e.g. box-b)</string>
@@ -31,8 +30,6 @@
 	<string name="add_title">Add a machine</string>
 	<string name="edit_title">Edit this machine</string>
 	<string name="remove_confirm">Remove this machine? Its tab and any connection are dropped. Nothing on the machine itself is touched.</string>
-	<string name="forget_hostkey">Forget the remembered host key</string>
-	<string name="hostkey_forgotten">The host key was forgotten. The next connection will trust whatever the machine presents.</string>
 	<string name="need_password">This machine has no SSH key on it yet, so it needs a password.</string>
 
 	<!-- the key dialog -->
