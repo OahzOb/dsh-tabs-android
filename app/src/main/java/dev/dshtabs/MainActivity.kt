@@ -501,10 +501,16 @@ class MainActivity : AppCompatActivity() {
 				render()
 			}
 
+			// **Selecting a tab selects it, and does nothing else.** This used to end
+			// in `maybeConnect(index)`, so tapping an idle tab opened a connection to
+			// that machine — silently when the app holds a key, through a password
+			// dialog when it does not. The operator asked to look at a tab, not to
+			// dial out, and a phone on someone else's network doing that on a stray
+			// tap is exactly the surprise the CONNECT button exists to avoid.
+			// Reported from use.
 			item.setOnClickListener {
 				activeIndex = index
 				render()
-				maybeConnect(index)
 			}
 			item.setOnLongClickListener {
 				showDeviceDialog(tab.device)
@@ -599,7 +605,7 @@ class MainActivity : AppCompatActivity() {
 				panelReason.text = tab.error ?: "no reason was recorded"
 				panelAction.visibility = View.VISIBLE
 				panelAction.text = getString(R.string.retry)
-				panelAction.setOnClickListener { maybeConnect(activeIndex, force = true) }
+				panelAction.setOnClickListener { maybeConnect(activeIndex) }
 			}
 			State.STARTING -> {
 				panelTitle.text = tab.device.display
@@ -614,7 +620,7 @@ class MainActivity : AppCompatActivity() {
 				panelReason.text = "${tab.device.user}@${tab.device.host}:${tab.device.sshPort}"
 				panelAction.visibility = View.VISIBLE
 				panelAction.text = getString(R.string.connect)
-				panelAction.setOnClickListener { maybeConnect(activeIndex, force = true) }
+				panelAction.setOnClickListener { maybeConnect(activeIndex) }
 			}
 		}
 		showTranscript(tab.lines)
@@ -636,9 +642,17 @@ class MainActivity : AppCompatActivity() {
 
 	// -------------------------------------------------------------- connecting
 
-	private fun maybeConnect(index: Int, force: Boolean = false) {
+	/**
+	 * Connect, because the operator pressed the button that says so.
+	 *
+	 * There used to be a `force` flag, because the tab row called this too and had to
+	 * be told not to disturb a tab that was already starting or running. The tab row
+	 * no longer connects anything, so the button is the only caller and the flag went
+	 * with it: a parameter that is always the same value is a second way to spell the
+	 * only thing this does.
+	 */
+	private fun maybeConnect(index: Int) {
 		val tab = tabs.getOrNull(index) ?: return
-		if (!force && tab.state != State.IDLE && tab.state != State.FAILED) return
 
 		// A key, when the app has one, replaces the prompt entirely — that is the
 		// whole point of having generated it. A password is asked for only when

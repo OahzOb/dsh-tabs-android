@@ -40,7 +40,7 @@ redirect, so every later reload uses the cookie rather than the URL.
 
 | | |
 | --- | --- |
-| **Several machines at once** | A tab per machine, each with its own SSH session, WebView and conversation. Switching tabs changes visibility and nothing else — the page is never reloaded, so a conversation is still there when you come back. |
+| **Several machines at once** | A tab per machine, each with its own SSH session, WebView and conversation. Switching tabs changes visibility and nothing else — the page is never reloaded, so a conversation is still there when you come back. **Connecting is the CONNECT button's job**: a tap on a tab selects it and never dials out. |
 | **No Harness on the phone** | Nothing is installed on the target machine and nothing runs locally. The app starts the far side's own `dsh web` and forwards its port. |
 | **SSH key, or a password** | Generate the app's key once and paste one line into `authorized_keys`, or use a password for a one-off connection. A password is never stored. |
 | **Host keys are pinned** | Trust on first use, then verified on every later connect. A changed host key is refused, and you are told, rather than silently accepted. |
