@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -58,17 +59,59 @@ class MainActivity : AppCompatActivity() {
 	/** How a tab is doing. */
 	private enum class State { IDLE, STARTING, RUNNING, FAILED }
 
+	/**
+	 * The identity of one connect attempt.
+	 *
+	 * **The job alone is not enough, and that is what this exists for.** A job that is
+	 * cancelled while `RemoteSession.open` is in flight never delivers its result, so
+	 * the session it opened has no owner — and nothing stopped the far side's
+	 * `dsh web`, which goes on holding the machine's port with no client anywhere that
+	 * knows it exists. That happens on three ordinary paths: a CONNECT on a second tab,
+	 * `stopEverything()` on back, and the activity's `lifecycleScope` at destroy. A
+	 * token carried by the tab separates "this attempt was cancelled" from "this tab is
+	 * no longer here at all", and either answer has to end in `session.stop()`.
+	 */
+	private class Token
+
 	private class Tab(
 		var device: Device,
 		var state: State = State.IDLE,
 		var session: RemoteSession? = null,
 		var error: String? = null,
-		var lines: List<String> = emptyList()
-	)
+		var lines: List<String> = emptyList(),
+		/** The attempt that owns this tab's connect, or a token nobody holds once one ends. */
+		var attempt: Token = Token(),
+		/** The connect coroutine, so × and `remove` can end an attempt that is in flight. */
+		var connectJob: Job? = null
+	) {
+		/**
+		 * End this tab's attempt and its session.
+		 *
+		 * Order matters in the same way it does inside [RemoteSession.stop]: the attempt
+		 * is cancelled first so that a result arriving afterwards is recognised as stale
+		 * and stopped rather than adopted.
+		 */
+		fun stop() {
+			connectJob?.cancel()
+			connectJob = null
+			session?.stop()
+			session = null
+		}
+	}
 
 	private val tabs = mutableListOf<Tab>()
 	private var activeIndex = -1
-	private var connectJob: Job? = null
+
+	/**
+	 * True once [onDestroy] has ended every session.
+	 *
+	 * A cancelled attempt's `finally` still runs afterwards — it is a plain coroutine,
+	 * not a lifecycle-aware one, and cancelling it cannot stop a block that has already
+	 * begun — so it must not paint a window that is gone. It has nothing left to do for
+	 * the UI either way: the destroy already put every tab back to IDLE and stopped the
+	 * service.
+	 */
+	private var destroyed = false
 
 	/** Passwords for this run only, keyed by device id. Never persisted. */
 	private val passwords = mutableMapOf<String, String>()
@@ -259,20 +302,38 @@ class MainActivity : AppCompatActivity() {
 
 	override fun onDestroy() {
 		super.onDestroy()
-		// Nothing here stops the sessions: rotating the screen must not drop a
-		// connection. They are stopped by `before-quit`'s equivalent below, or by the
-		// operator pressing ×, or by the process ending — and a process ending takes
-		// the sockets with it, which is what the remote side's stdin contract waits for.
-		if (isFinishing) stopEverything()
+		// **Any destroy ends the sessions, not only a finishing one.** The sessions live
+		// in this activity, so a destroy that is not `isFinishing` throws away the only
+		// list that can reach them: the foreground service and the far side's `dsh web`
+		// both go on running, `onCreate` rebuilds every tab as IDLE from the book, and
+		// the shade says "Connected to X" while the panel offers CONNECT — which starts
+		// a *second* `dsh web` on that machine.
+		//
+		// The `configChanges` list above (`orientation|screenSize|screenLayout|
+		// keyboardHidden|uiMode`) is what makes this look impossible, and it is the
+		// reason this went unnoticed: those changes arrive at `onConfigurationChanged`
+		// and never destroy anything. Every configuration **not** in that list does —
+		// `fontScale` is the one that is simply a setting, and it is *not* covered here
+		// by any of the five above; `locale` and `layoutDirection` are changed by
+		// `LocaleManager`, which is an ordinary system setting on 13+; `density`,
+		// `navigation`, `smallestScreenSize` and `colorMode` arrive the same way from a
+		// display or dock change. All of the resources that select a palette are
+		// re-resolved on the way through, which is why a mode change and a destroy can
+		// be the same event.
+		//
+		// **The cost of this version, stated because it is a decision:** sessions now
+		// belong to the window rather than to the process, so a configuration change
+		// that destroys the activity drops every connection and the operator connects
+		// again. The larger fix is to own them outside the activity — a process-level
+		// registry that `SessionService` re-attaches in `onCreate` — and that is
+		// deliberately out of scope here. This is the small version: it makes the two
+		// screens agree, at the price of a reconnect on a rare config change.
+		destroyed = true
+		stopEverything()
 	}
 
 	private fun stopEverything() {
-		connectJob?.cancel()
-		tabs.forEach { tab ->
-			tab.session?.stop()
-			tab.session = null
-			tab.state = State.IDLE
-		}
+		tabs.forEach { it.stop() }
 		SessionService.stop(this)
 	}
 
@@ -437,6 +498,59 @@ class MainActivity : AppCompatActivity() {
 				} catch (_: Exception) {
 					true
 				}
+			}
+
+			/**
+			 * The renderer died — and the platform's default is to **kill the app**.
+			 *
+			 * `WebViewClient.onRenderProcessGone` returning `false`, which is what the
+			 * base class does, makes the framework treat the crash as unrecoverable and
+			 * take the whole process down with it. Every tab shares one renderer, so an
+			 * out-of-memory in one remote page would end every session at once, and the
+			 * operator would never learn which page did it. Returning `true` says this
+			 * callback has dealt with it, and the process survives.
+			 *
+			 * **The SSH session is untouched by the renderer's death** — a renderer is a
+			 * separate process that draws a page, while the session, the forward and the
+			 * far side's `dsh web` live in this one — but the tab cannot go on claiming to
+			 * be running, so its attempt and session are stopped with it. `FAILED` means
+			 * "nothing is running" everywhere else in this file, and `stopServiceIfIdle`
+			 * reads exactly that: leaving a live session behind a tab that says otherwise
+			 * would make the service bookkeeping wrong. Nothing is wasted by it either —
+			 * **Try again** goes through `maybeConnect` → `startSession`, which stops
+			 * whatever was there and reconnects from scratch, so keeping the session would
+			 * not have made the button cheaper.
+			 *
+			 * That rather than an automatic rebuild, because the page that killed a
+			 * renderer once will do it again, and a loop with no way out is worse than a
+			 * button.
+			 */
+			override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+				val id = views.entries.firstOrNull { it.value.view === view }?.key
+				// Destroyed rather than hidden: a view whose renderer is gone can never
+				// paint again, and leaving it in the tree would keep `renderContent` from
+				// ever building its replacement.
+				webHost.removeView(view)
+				view.destroy()
+				if (id != null) {
+					views.remove(id)
+					tabs.firstOrNull { it.device.id == id }?.let { owner ->
+						owner.stop()
+						owner.state = State.FAILED
+						// `didCrash` is the platform's own answer to "the page died" versus
+						// "the system killed it for memory", and the two read differently to
+						// an operator: one is the page's fault, the other is the phone's.
+						owner.error = getString(
+							if (detail.didCrash()) R.string.renderer_crashed else R.string.renderer_killed,
+							owner.device.display
+						)
+					}
+				}
+				// The session this tab was holding is gone, so this is one of the paths that
+				// can leave the service with nothing to protect.
+				stopServiceIfIdle()
+				onMain { render() }
+				return true
 			}
 		}
 	}
@@ -700,17 +814,23 @@ class MainActivity : AppCompatActivity() {
 			reconnectAttempts.remove(tab.device.id)
 			tab.state = State.FAILED
 			tab.error = getString(R.string.reconnect_exhausted, tab.device.display, RECONNECT_ATTEMPTS, detail)
+			// The budget was the only reason the service was still up: `stopTab` below
+			// keeps it running while an attempt is pending, and this is the path where
+			// there is no longer one.
+			stopServiceIfIdle()
 			render()
 			return
 		}
 
-		connectJob?.cancel()
+		// The attempt's identity is minted by `startSession` once the wait below is over,
+		// not here. A token taken now would only be replaced a moment later, and there is
+		// nothing for it to guard in between: the tab has no session at this point.
 		tab.state = State.STARTING
 		tab.error = getString(R.string.reconnecting, tab.device.display, detail, attempt, RECONNECT_ATTEMPTS)
 		tab.lines = tab.lines + "[--:--:--] ${tab.error?.replace('\n', ' ')}"
 		render()
 
-		connectJob = lifecycleScope.launch {
+		tab.connectJob = lifecycleScope.launch {
 			// A short wait, then the same connect a tap would do. Reconnecting into a
 			// server that is still shutting down just fails again, and each failure costs
 			// the operator another few seconds of not knowing.
@@ -722,12 +842,25 @@ class MainActivity : AppCompatActivity() {
 	/**
 	 * Bring one tab up.
 	 *
+	 * **Every suspension point below re-checks that this attempt still owns this tab**,
+	 * and the `finally` is what makes that a guarantee rather than a hope. `open` can
+	 * return an open session — a live SSH connection, a bound forward, a `dsh web` on
+	 * the far side — to a coroutine that has already been cancelled, and a cancelled
+	 * coroutine discards that value and never reaches the `withContext(Dispatchers.Main)`
+	 * that would have adopted it. Nothing else in the app would ever hold a reference to
+	 * it, so nothing would ever stop it. Cancelling a job is therefore not enough by
+	 * itself: whatever the attempt opened has to be stopped by the attempt.
+	 *
 	 * @param isReconnect true when this attempt follows the server going away, which
 	 *   keeps the tab in a state that says so instead of clearing the explanation.
 	 */
 	private fun startSession(index: Int, secret: String?, isReconnect: Boolean = false) {
 		val tab = tabs.getOrNull(index) ?: return
-		connectJob?.cancel()
+		tab.stop()
+		// A fresh identity, so a result from an attempt that has just been superseded —
+		// or from one whose tab was removed — cannot be mistaken for this one's.
+		val attempt = Token()
+		tab.attempt = attempt
 		tab.state = State.STARTING
 		if (!isReconnect) {
 			tab.error = null
@@ -736,93 +869,193 @@ class MainActivity : AppCompatActivity() {
 		tab.lines = emptyList()
 		render()
 
-		connectJob = lifecycleScope.launch {
-			val result = RemoteSession.open(
-				device = tab.device,
-				credential = Keys.credentialFor(secret),
-				// `onLine` does **not** run on the main thread: the connect runs on
-				// Dispatchers.IO, so every transcript line arrives from a worker, and
-				// touching a view from there throws CalledFromWrongThreadException and
-				// kills the process. Measured, on the first real connect: the crash was
-				// `Expected: main  Calling: DefaultDispatcher-worker-2` at
-				// `showTranscript`. Every UI touch in this callback is deferred.
-				onLine = { line ->
-					tab.lines = tab.lines + line
-					if (index == activeIndex && tab.state == State.STARTING) {
-						val lines = tab.lines
-						onMain { showTranscript(lines) }
+		tab.connectJob = lifecycleScope.launch {
+			var opened: RemoteSession? = null
+			try {
+				val result = RemoteSession.open(
+					device = tab.device,
+					// The keystore and the key file are read here, on `Dispatchers.IO` —
+					// `RemoteSession.open` switches to IO itself, and this argument is
+					// evaluated before it does. Measured cost of getting that wrong: on the
+					// main thread this is `EncryptedSharedPreferences` → `MasterKey` →
+					// AndroidKeyStore decryption plus a private-key file read, on every
+					// connect, on the thread that is drawing the tab bar. `Keys` is where
+					// that work is defined; the README's threading section is why it is
+					// spelled out rather than left to the reader.
+					credential = withContext(Dispatchers.IO) { Keys.credentialFor(secret) },
+					// `onLine` does **not** run on the main thread: the connect runs on
+					// Dispatchers.IO, so every transcript line arrives from a worker, and
+					// touching a view from there throws CalledFromWrongThreadException and
+					// kills the process. Measured, on the first real connect: the crash was
+					// `Expected: main  Calling: DefaultDispatcher-worker-2` at
+					// `showTranscript`. Every UI touch in this callback is deferred.
+					onLine = { line ->
+						// Dropped once this attempt is stale — the tab is gone, or × or a
+						// newer attempt has taken it over. `index` may no longer name this
+						// tab, so appending by index would write into a different machine's
+						// transcript.
+						if (isCurrentAttempt(tab, attempt)) {
+							tab.lines = tab.lines + line
+							if (index == activeIndex && tab.state == State.STARTING) {
+								val lines = tab.lines
+								onMain { showTranscript(lines) }
+							}
+						}
+					},
+					// Same reason: this fires from the transport thread, and both of its
+					// effects end in a view.
+					onHostKey = { key ->
+						val id = tab.device.id
+						// A pin written for a tab that is gone is not wrong, exactly, but
+						// `rememberHostKey` writes the book and it is the same question, so
+						// it gets the same answer as everything else here.
+						if (isCurrentAttempt(tab, attempt)) onMain { rememberHostKey(id, key) }
 					}
-				},
-				// Same reason: this fires from the transport thread, and both of its
-				// effects end in a view.
-				onHostKey = { key ->
-					val id = tab.device.id
-					onMain { rememberHostKey(id, key) }
-				}
-			)
+				)
 
-			// Back on the main thread for everything that touches the UI. The connect
-			// above suspends, so this continuation resumes on the scope's dispatcher,
-			// but saying so explicitly is what keeps a later edit from reintroducing the
-			// same bug one line at a time.
-			withContext(Dispatchers.Main) {
-				when (result) {
-					is SessionStart.Ok -> {
-						tab.session = result.session
-						tab.state = State.RUNNING
-						tab.lines = result.session.transcript
-						// The probe result is cached in the book the same way the desktop app
-						// caches it: one round trip per machine, not one per connect.
-						cachePlatform(tab.device.id, result.session.platform)
-						SessionService.start(this@MainActivity, tab.device.display)
-						// The remote program can end while the SSH session stays up — a plugin
-						// that restarts the server, or a crash — and then the forward points at
-						// a dead port and the interface retries for ever with nothing to say
-						// why. The exec channel closing is the only signal that exists, so it is
-						// watched, and the tab is turned into something the operator can act on
-						// rather than a spinner that never resolves.
-						result.session.watchUntilEnded { code ->
-							if (tab.session !== result.session || tab.state != State.RUNNING) return@watchUntilEnded
-							// Stop first, then write the reason: `stopTab` deliberately
-							// resets a stopped tab to idle with no error, which is right for
-							// the × button and wrong here. Measured: the other order made the
-							// panel say `no reason was recorded`, which is exactly the
-							// unhelpful outcome this watchdog exists to remove.
-							stopTab(tabs.indexOf(tab))
-							val detail = if (code >= 0) " (exit code $code)" else ""
-							// A successful connect clears the retry budget, so a machine that
-							// restarts once an hour is never treated as a machine that keeps
-							// dying.
-							reconnectAttempts.remove(tab.device.id)
-							reconnect(tabs.indexOf(tab), detail)
+				// A session that came back after this attempt was cancelled belongs to
+				// nobody: the tab it was opened for has moved on or gone, and the UI this
+				// would have reported to is no longer showing it. It is stopped below,
+				// before this coroutine returns.
+				if (result is SessionStart.Ok) opened = result.session
+
+				// Back on the main thread for everything that touches the UI. The connect
+				// above suspends, so this continuation resumes on the scope's dispatcher,
+				// but saying so explicitly is what keeps a later edit from reintroducing the
+				// same bug one line at a time.
+				withContext(Dispatchers.Main) {
+					// The last suspension point, and the only one that matters most: a
+					// cancellation between `open` returning and here is the leak this whole
+					// shape exists to close.
+					if (!isCurrentAttempt(tab, attempt)) return@withContext
+					when (result) {
+						is SessionStart.Ok -> {
+							tab.session = result.session
+							tab.state = State.RUNNING
+							tab.lines = result.session.transcript
+							// The probe result is cached in the book the same way the desktop app
+							// caches it: one round trip per machine, not one per connect.
+							cachePlatform(tab.device.id, result.session.platform)
+							SessionService.start(this@MainActivity, tab.device.display)
+							// The remote program can end while the SSH session stays up — a plugin
+							// that restarts the server, or a crash — and then the forward points at
+							// a dead port and the interface retries for ever with nothing to say
+							// why. The exec channel closing is the only signal that exists, so it is
+							// watched, and the tab is turned into something the operator can act on
+							// rather than a spinner that never resolves.
+							result.session.watchUntilEnded { code ->
+								if (tab.session !== result.session || tab.state != State.RUNNING) return@watchUntilEnded
+								// Stop first, then write the reason: `stopTab` deliberately
+								// resets a stopped tab to idle with no error, which is right for
+								// the × button and wrong here. Measured: the other order made the
+								// panel say `no reason was recorded`, which is exactly the
+								// unhelpful outcome this watchdog exists to remove.
+								//
+								// `keepService` because a reconnect follows in the next two
+								// statements: deactivating a foreground service and asking for it
+								// again a few milliseconds later leaves the process — and the
+								// tunnel inside it — unprotected through the whole retry, which is
+								// the window this service exists to cover.
+								stopTab(tabs.indexOf(tab), keepService = true)
+								val detail = if (code >= 0) " (exit code $code)" else ""
+								// A successful connect clears the retry budget, so a machine that
+								// restarts once an hour is never treated as a machine that keeps
+								// dying.
+								reconnectAttempts.remove(tab.device.id)
+								reconnect(tabs.indexOf(tab), detail)
+							}
+						}
+						is SessionStart.Failed -> {
+							tab.state = State.FAILED
+							tab.error = result.error
+							tab.lines = result.transcript
+							// A failed password is very likely wrong rather than stale, so
+							// forget it and ask again next time instead of retrying the same
+							// string.
+							passwords.remove(tab.device.id)
 						}
 					}
-					is SessionStart.Failed -> {
-						tab.state = State.FAILED
-						tab.error = result.error
-						tab.lines = result.transcript
-						// A failed password is very likely wrong rather than stale, so
-						// forget it and ask again next time instead of retrying the same
-						// string.
-						passwords.remove(tab.device.id)
-					}
+					render()
 				}
-				render()
+			} finally {
+				// Reached however this attempt ended — adopted, failed, cancelled at any
+				// suspension point, or thrown out of the credential read. The tab never
+				// took this session, so this is the only reference to it left anywhere.
+				if (opened != null && tab.session !== opened) {
+					opened.stop()
+				}
+				// A cancelled attempt also leaves the tab saying STARTING, which offers no
+				// CONNECT button — `renderPanel` hides it — so × would be the only way out.
+				// Nothing is running any more, so the tab goes back to the state that has a
+				// button. Skipped once the window is gone, which is the other way this block
+				// is reached: the destroy has already reset every tab itself.
+				if (!destroyed && isCurrentAttempt(tab, attempt) && tab.state == State.STARTING) {
+					tab.state = State.IDLE
+					render()
+				}
+				stopServiceIfIdle()
 			}
 		}
 	}
 
-	private fun stopTab(index: Int) {
+	/**
+	 * True when `attempt` still owns `tab`, and `tab` is still in the bar.
+	 *
+	 * Both halves are needed and neither implies the other: a tab removed from `tabs`
+	 * keeps its token, and a tab taken over by a newer attempt keeps its identity. Only
+	 * the second question is about the attempt; the first is about the tab.
+	 *
+	 * Identity (===) rather than equality throughout: `Tab` and `Token` are compared by
+	 * reference on purpose, because two attempts at the same machine are different
+	 * attempts and must not be confused for one another. A caller that also holds an
+	 * index asks the same question through `tabs.getOrNull(index) === tab`, which
+	 * answers both halves in one read.
+	 */
+	private fun isCurrentAttempt(tab: Tab, attempt: Token): Boolean =
+		tab.attempt === attempt && tabs.any { it === tab }
+
+	/**
+	 * Take the foreground service down when nothing needs it.
+	 *
+	 * Called after every path that can end a session, because the service is what keeps
+	 * the process — and therefore the tunnel inside it — out of the cached state. It
+	 * stays up while **either** a session is running or starting, **or** a tab still has
+	 * reconnect budget: a reconnect that has not started yet is exactly the window the
+	 * service exists to protect, and using the budget rather than a "pending" flag means
+	 * there is no flag to forget to clear.
+	 */
+	private fun stopServiceIfIdle() {
+		val busy = tabs.any {
+			it.state == State.RUNNING || it.state == State.STARTING ||
+				(reconnectAttempts[it.device.id] ?: 0) > 0
+		}
+		if (!busy) SessionService.stop(this)
+	}
+
+	/**
+	 * Stop one tab's connection, and give it back the state that offers CONNECT.
+	 *
+	 * @param keepService true when a reconnect follows immediately, which is the
+	 *   watchdog's case. The service must not be deactivated and asked for again inside
+	 *   a retry: the process — and the tunnel inside it — is unprotected for the whole
+	 *   window between the two, which is the exact window [SessionService] exists to
+	 *   cover. It is stopped later, when the retry budget is exhausted or when the tab
+	 *   really is idle; `stopServiceIfIdle` decides that.
+	 */
+	private fun stopTab(index: Int, keepService: Boolean = false) {
 		val tab = tabs.getOrNull(index) ?: return
-		tab.session?.stop()
-		tab.session = null
+		tab.stop()
 		tab.state = State.IDLE
 		tab.error = null
+		// × ends the retry as well as the attempt. The budget is what `stopServiceIfIdle`
+		// reads as "a reconnect is pending", and dropping it here is what keeps the
+		// difference between a retry that is coming and one the operator just cancelled.
+		reconnectAttempts.remove(tab.device.id)
 		// Nothing to navigate here any more: `renderContent` retires this tab's view
 		// because it is no longer running, and destroys it. The `about:blank` that
 		// used to be loaded first was a step towards the same end, on a screen the
 		// operator never sees.
-		if (tabs.none { it.state == State.RUNNING || it.state == State.STARTING }) SessionService.stop(this)
+		if (!keepService) stopServiceIfIdle()
 	}
 
 	/** Persist the host key learned on a first connect, so a change is later caught. */
@@ -972,8 +1205,15 @@ class MainActivity : AppCompatActivity() {
 		val scroll = android.widget.ScrollView(this).apply { addView(column) }
 
 		lateinit var dialog: AlertDialog
-		fun refresh() {
-			val public = Keys.publicKey()
+
+		// One refresh, and it is a suspend one. `Keys.publicKey()` is not a cheap read:
+		// it decrypts the passphrase through `EncryptedSharedPreferences` and the Android
+		// Keystore, reads the private key file, and parses the key. On the main dispatcher
+		// that is a stall on the frame that opens this dialog, and this screen used to pay
+		// for it **twice** for one value that had not changed between the two: once in the
+		// `onShow` below and once immediately after `show()` returned.
+		suspend fun refresh() {
+			val public = withContext(Dispatchers.IO) { Keys.publicKey() }
 			if (public == null) {
 				state.text = getString(R.string.key_none)
 				keyView.visibility = View.GONE
@@ -987,7 +1227,13 @@ class MainActivity : AppCompatActivity() {
 			}
 		}
 
-		val generate = { _: android.content.DialogInterface, _: Int ->
+		// Suspending because `refresh` is, so both callers run it from a coroutine on the
+		// main dispatcher: that is what puts the *read* on IO while every `getString` and
+		// view assignment stays where it has to be. `Keys.generate` and `Keys.forget`
+		// stay on the main thread deliberately — they are a button press, not a frame
+		// that has to be drawn, and moving them would change what the try/catch below
+		// covers.
+		val generate: suspend (android.content.DialogInterface, Int) -> Unit = { _, _ ->
 			try {
 				Keys.generate()
 				toast(getString(R.string.key_generated))
@@ -1007,15 +1253,17 @@ class MainActivity : AppCompatActivity() {
 
 		dialog.setOnShowListener {
 			dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-				if (Keys.exists()) {
-					val public = Keys.publicKey()
-					if (public != null) {
-						val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-						clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SSH public key", public))
-						toast(getString(R.string.key_copied))
+				lifecycleScope.launch {
+					if (Keys.exists()) {
+						val public = withContext(Dispatchers.IO) { Keys.publicKey() }
+						if (public != null) {
+							val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+							clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SSH public key", public))
+							toast(getString(R.string.key_copied))
+						}
+					} else {
+						generate(dialog, 0)
 					}
-				} else {
-					generate(dialog, 0)
 				}
 			}
 			dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
@@ -1027,16 +1275,21 @@ class MainActivity : AppCompatActivity() {
 					.setTitle(R.string.key_title)
 					.setMessage(R.string.key_replace_confirm)
 					.setPositiveButton(R.string.key_replace) { _, _ ->
+						// Generation is a button press, not a frame, so it stays here on the
+						// main thread with the try/catch that reports why it failed. Of the
+						// three steps, only the read-back inside `refresh` decrypts a key
+						// again, and that is the one that moved to IO.
 						Keys.forget()
-						generate(dialog, 0)
+						lifecycleScope.launch { generate(dialog, 0) }
 					}
 					.setNegativeButton(R.string.cancel, null)
 					.show()
 			}
-			refresh()
+			// The only refresh this dialog gets on the way up. `show()` delivers
+			// `onShow` after the window exists, so there is nothing to refresh before it.
+			lifecycleScope.launch { refresh() }
 		}
 		dialog.show()
-		refresh()
 	}
 
 	private fun confirmRemove(device: Device) {		AlertDialog.Builder(this)
@@ -1067,16 +1320,27 @@ class MainActivity : AppCompatActivity() {
 	private fun remove(device: Device) {
 		val at = tabs.indexOfFirst { it.device.id == device.id }
 		if (at != -1) {
-			stopTab(at)
+			// The whole attempt goes with the tab, not only the session that is up. A
+			// connect in flight used to survive its tab being removed: the tab left the
+			// list, the job kept running, and a successful open still ran `tab.session =
+			// …; SessionService.start(…)` for a tab no UI could reach. The watchdog then
+			// called `stopTab(tabs.indexOf(tab))` with -1 and returned without doing
+			// anything, so that `dsh web` stayed up on the far side for the life of the
+			// process. Cancelling the attempt stops whatever it opened — see the `finally`
+			// in `startSession`.
+			val tab = tabs[at]
+			tab.stop()
 			tabs.removeAt(at)
 		}
 		DeviceBook.mutate { stored -> stored.filterNot { it.id == device.id } }
 		passwords.remove(device.id)
+		reconnectAttempts.remove(device.id)
 		activeIndex = when {
 			tabs.isEmpty() -> -1
 			activeIndex >= tabs.size -> tabs.size - 1
 			else -> activeIndex
 		}
+		stopServiceIfIdle()
 		render()
 	}
 
@@ -1091,7 +1355,18 @@ class MainActivity : AppCompatActivity() {
 		requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
 	}
 
+	/**
+	 * A short message, from the main thread, and never from a window that has gone.
+	 *
+	 * The guard is here rather than at the call sites because the key dialog's buttons now
+	 * run in coroutines — they suspend on the keystore read — and a dialog can be
+	 * dismissed, or the activity destroyed, while one is waiting. Showing a toast from a
+	 * destroyed activity is an exception on API 30+, and there is nothing left to show it
+	 * to in any case.
+	 */
+	@MainThread
 	private fun toast(text: String) {
+		if (isFinishing || isDestroyed) return
 		Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
 	}
 

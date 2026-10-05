@@ -114,6 +114,7 @@ each section is a decision that cost something to learn.
 | [The app's own SSH key](#the-apps-own-ssh-key) | Where it lives and what protects it |
 | [Diagnosing a connection](#diagnosing-a-connection) | What to look at when it will not connect |
 | [What was verified, and how](#what-was-verified-and-how) | The verification table |
+| [The connect attempt that nobody owned](#the-connect-attempt-that-nobody-owned) | The session a cancelled connect used to leak, and why the activity owns its sessions |
 | [Known gaps](#known-gaps) | What it does not do yet |
 
 ---
@@ -222,6 +223,7 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 | [The app's own SSH key](#the-apps-own-ssh-key) | 密钥存在哪、靠什么保护 |
 | [Diagnosing a connection](#diagnosing-a-connection) | 连不上时该看什么 |
 | [What was verified, and how](#what-was-verified-and-how) | 验证记录表 |
+| [The connect attempt that nobody owned](#the-connect-attempt-that-nobody-owned) | 被取消的连接曾经泄漏的那条会话，以及会话为什么归窗口所有 |
 | [Known gaps](#known-gaps) | 目前还做不到什么 |
 
 > 技术细节一律以英文原文为准，中文部分不重复翻译，避免两份说明逐渐说不到一起去。
@@ -456,7 +458,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 17 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 22 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
@@ -1001,6 +1003,112 @@ boot is not restarted in a loop on someone else's machine, from a phone in a poc
 
 Pressing **×** cancels the watcher, so a tab you disconnected stays disconnected.
 
+### What the last round of fixes could not be settled without, and how
+
+Six of them are about work that only happens when a coroutine is cancelled, an activity
+is destroyed, a service is restarted or a renderer dies — none of which a JVM unit test
+can produce, and the phone was not attached for that round. They are written down as
+**device checks** rather than left implied, because each is a check someone can run in a
+minute and none of them is visible from the build machine:
+
+| Fix | The device check that settles it |
+| --- | --- |
+| A cancelled connect stops its session | Connect to a slow host (the host-key exchange and the readiness line are the two long waits), tap CONNECT on another tab while the first is still starting, then `pgrep -af 'dsh web'` on the far side. One process, not two. |
+| …and again when the tab is removed | Long-press the tab mid-connect, Remove, then the same `pgrep`. |
+| A non-finishing destroy stops its sessions | The configurations that get there cannot be triggered by hand — rotating is in `configChanges`, and font scale is in Settings — so temporarily drop `fontScale` from `configChanges`, change it while connected, and confirm the tab comes back IDLE with the far side's `dsh web` gone. |
+| The service survives a reconnect | Kill the remote server (or write the plugin that restarts it) and watch `adb shell dumpsys activity services dev.dshtabs` across the retry: the service and its notification must stay up for the whole backoff, not disappear and come back. |
+| The keystore is off the main thread | Start a method trace around a connect with a key present and check that `EncryptedSharedPreferences` / `MasterKey` / `Keys.credentialFor` are not on the main thread. On a device with a hardware-backed keystore the decrypt is also slow enough to see as a stalled frame on the CONNECT tap. |
+| The app survives a dead renderer | Load the remote page, kill its renderer (`adb shell ps -A` for the `sandboxed_process` of this app, then kill that pid), and confirm the app does not restart and the other tabs keep their sessions. |
+
+One of them **is** settled on the build machine, and it is the one this file calls the
+reason `HostKeys.kt` exists: `TrustOnFirstUseTest` drives `TrustOnFirstUse.check`
+directly — accept an unknown host and report its key, accept a pinned key without
+reporting it again, refuse a changed one — with no device, no session and no socket. It
+had no test at all before that round, which the suite's own count makes plain: 18
+checks then, 22 now.
+
+## The connect attempt that nobody owned
+
+The teardown contract above is stated in terms of a session someone is holding. This is
+the case where **nobody is**, and it is the worst version of the failure, because the
+far side is left holding a port with no client anywhere that knows it exists. Reported
+from review rather than from use, which is worth saying: the leak is silent from the
+phone, and only the machine on the other end can see it.
+
+A connect is a `lifecycleScope` coroutine that suspends inside `RemoteSession.open`,
+and there used to be **one** `connectJob` field shared by every tab. A second connect —
+CONNECT on another tab, or an automatic reconnect — cancelled it, so a connect already
+in flight was cancelled *after* it had opened an SSH session, a forward and a remote
+`dsh web` and *before* the continuation that assigns `tab.session` could run. A
+cancelled coroutine discards the value it was about to return, so the session was
+garbage with no reference to it anywhere: not stopped, not reaped, not even visible.
+Three ordinary paths reached it — a CONNECT on a second tab, `stopEverything()` on
+back, and the activity's own `lifecycleScope` at destroy.
+
+Three statements fix it, and each is load-bearing:
+
+1. **A token per attempt**, held by the tab, so a result can be recognised as belonging
+   to an attempt that no longer owns anything. The job cannot answer that question:
+   cancelling a job says nothing about what the cancelled work has already done.
+2. **Every suspension point re-checks**, and the check is identity — `tab.attempt ===
+   attempt` **and** `tabs.getOrNull(index) === tab`. A tab removed from the book keeps
+   its token and a tab taken over by a newer attempt keeps its identity, so neither
+   half implies the other.
+3. **A `finally` that stops whatever the attempt opened**, if the tab never took it.
+   This is the one that actually closes the leak: a `RemoteSession` that comes back to a
+   cancelled coroutine is stopped by the attempt that opened it, at the last moment
+   anything in the process still knows it exists.
+
+Removing a machine takes its attempt with it (`Tab.stop()` cancels the coroutine before
+dropping the tab), because that path had a second failure stacked on the first: the
+connect outlived the tab, and its success path ran `SessionService.start(…)` for a tab
+no UI could reach. The watchdog that would eventually have noticed then called
+`stopTab(tabs.indexOf(tab))` with `-1`, and `stopTab` returned without doing anything —
+so the far side kept a `dsh web` for the life of the process. A cancelled attempt also
+used to leave its tab saying `STARTING`, which offers **no CONNECT button**
+(`renderPanel` hides it), so × was the only way out of a tab that was doing nothing.
+
+**What is not verified:** none of this has been run on a device. Everything above is
+reasoning over the code plus the fact that the suite compiles and passes, and the check
+that would settle it is on the far side rather than the phone — see
+[What the last round of fixes could not be settled without](#what-the-last-round-of-fixes-could-not-be-settled-without-and-how).
+
+**The activity owns its sessions, and that is a decision with a price.** A destroy that
+is *not* `isFinishing` used to leave the sessions running inside a `tabs` list that was
+thrown away, while the foreground service kept the process alive and `onCreate` rebuilt
+every tab as IDLE from the book: the shade said "Connected to X", the panel offered
+CONNECT, and pressing it would start a **second** `dsh web` on that machine. The
+`configChanges` list (`orientation|screenSize|screenLayout|keyboardHidden|uiMode`)
+covers the changes that used to make this look impossible — those never destroy
+anything — but every configuration *not* in it does, and one of them is just a setting:
+**font scale** is in Settings, is not covered by any of those five, and destroys the
+activity when it changes. `locale` and `layoutDirection` are changed in the same way by
+`LocaleManager` on Android 13+, and `density`, `navigation`, `smallestScreenSize` and
+`colorMode` arrive from a display or dock change. The resources that select the palette
+are re-resolved through all of them, so a mode change and a destroy can be one event.
+
+`onDestroy` now stops the sessions whichever kind of destroy it is. The cost is stated
+where the decision is: **sessions belong to the window rather than to the process**, so
+a destroying configuration change drops every connection and the operator connects
+again. The larger fix — a process-level registry that `SessionService` re-attaches in
+`onCreate` — is deliberately out of scope, and that is the known gap rather than an
+oversight. See [Known gaps](#known-gaps).
+
+Two consequences of destroying with a connect in flight, both closed in the same change:
+a cancelled attempt's `finally` still runs, and cancelling a coroutine cannot stop a
+block that has already begun, so it is told the window is gone before it paints one; and
+because the key dialog's buttons now run in coroutines that suspend on the keystore, a
+dialog can be dismissed or the activity destroyed while one is waiting — the one path
+that could still ask a dead activity for a string and then show a toast from it.
+
+The same review turned up the service being dropped at the worst possible moment. The
+watchdog stops the tab and *then* starts the retry, and `stopTab` stopped the foreground
+service on the way through — so for the single-tab case the process was unprotected for
+the whole backoff, which is precisely the window this service is for. The service is now
+kept while any tab still has reconnect budget, and stopped when the budget is spent or
+the tab really is idle. Pressing **×** clears the budget, so a cancelled retry does not
+hold a foreground service and a notification up for ever.
+
 ## Known gaps
 
 - **Doze will eventually stall a session.** A foreground service keeps the process
@@ -1038,3 +1146,19 @@ Pressing **×** cancels the watcher, so a tab you disconnected stays disconnecte
   therefore a faithful copy of a program this client has run for real, not an
   independent implementation — which is the most confidence available without the
   host, and the reason it was copied rather than rewritten smaller.
+- **Sessions belong to the activity, not to the process.** So a configuration change
+  that destroys the activity drops every connection and the operator connects again.
+  Rotating does not — that is in `configChanges` on purpose — but changing the system
+  **font scale** does, and so do a locale change, a display/density change and the rest
+  of the list in [The connect attempt that nobody
+  owned](#the-connect-attempt-that-nobody-owned). `onDestroy` stops the sessions because
+  the alternative was worse: sessions no UI could reach, with the shade still claiming a
+  connection and a CONNECT button that would start a second `dsh web` on that machine.
+  Owning them outside the activity is the real fix and is not done.
+- **A dead renderer leaves its tab asking.** One renderer serves every tab, so an
+  out-of-memory in one remote page ends that page for all of them — the app now
+  survives it (`onRenderProcessGone` returning `true` is what used to kill the
+  process) and the SSH session is untouched, but the page is not rebuilt on its own.
+  The tab says what happened and offers Try again, deliberately: a page that killed a
+  renderer once will do it again, and an automatic loop is worse than a button.
+  Nothing here can stop the *page* from being the thing that exhausts memory.
