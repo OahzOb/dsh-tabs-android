@@ -933,6 +933,12 @@ class MainActivity : AppCompatActivity() {
 							tab.session = result.session
 							tab.state = State.RUNNING
 							tab.lines = result.session.transcript
+							// **A working connection is what resets the retry budget**, so a
+							// machine that restarts once an hour is never treated as one that
+							// keeps dying, while consecutive failures keep counting towards the
+							// bound. This is the line the watchdog's comment used to claim
+							// existed somewhere else; see the failure branch for why it moved.
+							reconnectAttempts.remove(tab.device.id)
 							// The probe result is cached in the book the same way the desktop app
 							// caches it: one round trip per machine, not one per connect.
 							cachePlatform(tab.device.id, result.session.platform)
@@ -958,10 +964,6 @@ class MainActivity : AppCompatActivity() {
 								// the window this service exists to cover.
 								stopTab(tabs.indexOf(tab), keepService = true)
 								val detail = if (code >= 0) " (exit code $code)" else ""
-								// A successful connect clears the retry budget, so a machine that
-								// restarts once an hour is never treated as a machine that keeps
-								// dying.
-								reconnectAttempts.remove(tab.device.id)
 								reconnect(tabs.indexOf(tab), detail)
 							}
 						}
@@ -973,6 +975,17 @@ class MainActivity : AppCompatActivity() {
 							// forget it and ask again next time instead of retrying the same
 							// string.
 							passwords.remove(tab.device.id)
+							// **A failed reconnect is not the end of the budget.** The server may
+							// still be coming up — an agent editing a plugin restarts it — so the
+							// count stands and `reconnect` schedules another attempt until the
+							// budget is spent, which is the only way `reconnect_exhausted` is ever
+							// reached.
+							//
+							// It could not be reached before: the watchdog cleared the count
+							// immediately before asking for the retry, so `attempt` was always 1,
+							// and a failed retry stopped there instead of counting. The budget is
+							// now cleared by a *successful* connect and by nothing else.
+							if (isReconnect) reconnect(index, result.error)
 						}
 					}
 					render()
