@@ -450,8 +450,25 @@ class MainActivity : AppCompatActivity() {
 		render()
 	}
 
+	/**
+	 * The one origin a tab's page belongs to: `scheme://host:port`, or null when the URL
+	 * does not name a port at all.
+	 *
+	 * Ports are the identity here. Every tab's forward binds its own loopback port, so
+	 * "same host" is not "same machine" — and a URL without a port (`http://localhost/`)
+	 * names nothing this app serves, so it is treated as not-ours rather than guessed at.
+	 */
+	private fun originOf(url: String): String? {
+		val parsed = android.net.Uri.parse(url)
+		val scheme = parsed.scheme ?: return null
+		val host = parsed.host ?: return null
+		val port = parsed.port
+		if (port == -1) return null
+		return "$scheme://$host:$port"
+	}
+
 	@SuppressLint("SetJavaScriptEnabled")
-	private fun configureWebView(view: WebView) {
+	private fun configureWebView(view: WebView, origin: String?) {
 		with(view.settings) {
 			// The page is the Harness UI, which is a real web application; without
 			// JavaScript there is nothing to show.
@@ -481,17 +498,24 @@ class MainActivity : AppCompatActivity() {
 		}
 		view.webViewClient = object : WebViewClient() {
 			/**
-			 * Keep the WebView on the forward and nowhere else.
+			 * Keep the WebView on **this tab's** forward and nowhere else.
 			 *
 			 * The remote UI contains links, and a tap must not turn this window into a
-			 * browser with no tab bar and no way back. Anything that is not the loopback
-			 * origin this tab's own forward serves is handed to the system browser —
-			 * which is also what the desktop app does with `shell.openExternal`.
+			 * browser with no tab bar and no way back. That was already true — but "loopback"
+			 * was the test, and every tab has its own forwarded port, so a link to
+			 * `127.0.0.1:<another tab's port>` rendered **another machine's interface under
+			 * this tab's label**. It went further than a mislabel: the view reconciliation
+			 * compares the URL a view was *created* with, so the swap was invisible to it and
+			 * the tab kept claiming to show what it started with.
+			 *
+			 * The origin is now the tab's own `scheme://host:port`, which is where the port
+			 * carries the identity — the opposite of how cookies work, and for the same
+			 * reason the Harness names its cookie per authority. Everything else, loopback
+			 * included, is handed to the system browser, which is what the desktop app does
+			 * with `shell.openExternal`.
 			 */
 			override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-				val host = request.url.host ?: return true
-				val local = host == "127.0.0.1" || host == "localhost" || host == "::1"
-				if (local) return false
+				if (origin != null && originOf(request.url.toString()) == origin) return false
 				return try {
 					startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, request.url))
 					true
@@ -681,7 +705,7 @@ class MainActivity : AppCompatActivity() {
 		val view = existing?.takeIf { it.url == session.url }?.view ?: run {
 			val created = WebView(this)
 			created.setBackgroundColor(getColor(R.color.bg))
-			configureWebView(created)
+			configureWebView(created, originOf(session.url))
 			webHost.addView(
 				created,
 				android.widget.FrameLayout.LayoutParams(
