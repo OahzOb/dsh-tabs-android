@@ -12,7 +12,6 @@
 	     mode that dark is the only direction with room. -->
 	<color name="bg">#16161A</color>
 	<color name="bar">#1D1D22</color>
-	<color name="tab">#26262C</color>
 	<color name="line">#33333B</color>
 	<color name="fg">#E6E6EA</color>
 	<color name="dim">#9A9AA4</color>
