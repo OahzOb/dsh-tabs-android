@@ -261,11 +261,15 @@ class RemoteParityTest {
 			// The two additions, each a failure this client paid for.
 			"Join-Path \$shimDir 'node.exe'",
 			"node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
-			// Whatever the shim's directory holds, the launcher starts the interpreter
+			// Whatever a candidate's directory holds, the launcher starts the interpreter
 			// on `bin.js` or refuses by name. There is no `.cmd` shim fallback left to
 			// take: starting the shim is the failure the resolution exists to avoid,
-			// and starting nothing would run `node web --no-open --port 0`.
-			"\$binJs does not exist",
+			// and starting nothing would run `node web --no-open --port 0`. The walk
+			// replaced a single `Get-Command` answer, which could name a shim that has
+			// no `bin.js` while a launchable `dsh` sits behind it.
+			"\$candidates = @(\$dsh)",
+			"no launchable dsh on this Windows host",
+			"no node.exe on this Windows host",
 			"[Console]::Error.WriteLine(\"launch node=",
 			"[Diagnostics.Stopwatch]::StartNew()",
 			"-lt 60",

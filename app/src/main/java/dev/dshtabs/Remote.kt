@@ -238,21 +238,35 @@ object Remote {
 		val dir = directory ?: ""
 		val parts = mutableListOf(windowsResolve())
 		parts += "\$node = 'FALLBACK'"
-		parts += "\$shimDir = Split-Path -Parent \$dsh"
-		parts += "\$binJs = Join-Path \$shimDir 'node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'"
+		// **`Get-Command` is not enough, and the way it fails is worse than not at all.**
+		// It answers with whatever PATH finds first, and a package manager's shim can sit
+		// in front of an npm install while carrying no `bin.js` of its own — measured on
+		// the Windows host with such a shim first on PATH: the old code chose it and
+		// refused with exit 127 *while a launchable dsh sat behind it*, sending the
+		// operator to reinstall something that was already installed. The walk below
+		// takes the first candidate whose own directory carries the script, and the
+		// well-known locations are the same fallback `windowsResolve` keeps for a PATH
+		// that was trimmed.
+		parts += "\$candidates = @(\$dsh) + @(\"\$env:APPDATA\\npm\\dsh.cmd\", \"\$env:PNPM_HOME\\dsh.cmd\", \"\$env:LOCALAPPDATA\\pnpm\\bin\\dsh.cmd\", \"\$env:ProgramFiles\\nodejs\\dsh.cmd\")"
+		parts += "\$binJs = \$null; \$shimDir = \$null; \$dsh = \$null"
+		parts += "foreach (\$candidate in \$candidates) { if ([string]::IsNullOrEmpty(\$candidate)) { continue }; \$dir = Split-Path -Parent \$candidate; \$bin = Join-Path \$dir 'node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'; if (Test-Path -LiteralPath \$bin) { \$dsh = \$candidate; \$shimDir = \$dir; \$binJs = \$bin; break } }"
 		// A missing `bin.js` used to fall back to `$dsh` itself, and that cannot work
 		// here: the launcher always starts `$node`, so no script would be named and
 		// `node web --no-open --port 0` would exit on `Cannot find module …\web`,
-		// blaming the wrong thing. Refused by name instead. Reachable wherever the
-		// shim's own directory carries no `node_modules\@deepseek-ai\dsh` — a pnpm
-		// global install, or a `dsh` shimmed in from somewhere else, among them.
-		parts += "if (-not (Test-Path -LiteralPath \$binJs)) { [Console]::Error.WriteLine(\"dsh is at \$dsh, but \$binJs does not exist; this launcher starts node on bin.js rather than the .cmd shim, so bin.js has to sit in the node_modules beside the shim\"); exit 127 }"
+		// blaming the wrong thing. Refused by name instead, and the message counts the
+		// candidates rather than listing them — the client truncates a remote reason at
+		// 300 characters, and four paths are most of that on their own.
+		parts += "if ([string]::IsNullOrEmpty(\$binJs)) { [Console]::Error.WriteLine(\"no launchable dsh on this Windows host: \$(\$candidates.Count) candidate(s) checked, none carries node_modules\\@deepseek-ai\\dsh\\lib\\bin.js - install dsh with npm -g, or point PATH at a shim whose directory has one\"); exit 127 }"
 		// The interpreter is looked for in the shim's own directory first, because an npm
 		// global install puts `node.exe` there; `%ProgramFiles%\nodejs` is the ordinary
 		// install, and the bare name is the last resort. Each candidate is tested before
 		// it is chosen, so the log below can say which one actually won.
 		parts += "\$cand = @((Join-Path \$shimDir 'node.exe'), (Join-Path \$env:ProgramFiles 'nodejs\\node.exe'), 'node')"
 		parts += "foreach (\$n in \$cand) { if (\$node -eq 'FALLBACK') { try { if (Get-Command \$n -ErrorAction Stop) { \$node = \$n } } catch { } } }"
+		// The other half of the same silence: `$node` staying at its sentinel means the
+		// launcher is about to run `FALLBACK <script>`, which is a command-not-found
+		// dressed up as a launch. Said out loud, with where it looked.
+		parts += "if (\$node -eq 'FALLBACK') { [Console]::Error.WriteLine(\"no node.exe on this Windows host: looked in \$shimDir, \$env:ProgramFiles\\nodejs and on PATH\"); exit 127 }"
 		if (dir.isNotEmpty()) {
 			// **One statement, and it has to stay one.** The statements here are joined
 			// with `"; "`, so writing the tilde translation as three parts puts a
