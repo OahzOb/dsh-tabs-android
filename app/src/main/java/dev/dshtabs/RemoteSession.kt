@@ -3,6 +3,7 @@ package dev.dshtabs
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -284,6 +285,19 @@ class RemoteSession private constructor(
 							transcript = synchronized(lines) { lines.toList() }
 						)
 					)
+				} catch (error: CancellationException) {
+					// **Cancellation is not a failure to report, and it is not an ordinary
+					// exception.** It arrives here like any other, and swallowing it would
+					// leave this coroutine running after the tab it belongs to had been
+					// removed or taken over, with the cancellation only noticed at whatever
+					// suspension point came next — or never, if there is none.
+					//
+					// The cleanup still has to happen first: a cancelled connect must not
+					// leave the far side holding a server, so the session and channel are
+					// closed exactly as a failure closes them (`fail` does that), and then
+					// the cancellation continues on its way.
+					fail(error.message ?: "cancelled", session, channel, lines)
+					throw error
 				} catch (error: Exception) {
 					return@withContext fail(error.message ?: error.javaClass.simpleName, session, channel, lines)
 				}
