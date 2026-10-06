@@ -953,6 +953,37 @@ the desktop project's live suite: the readiness line, the token→cookie exchang
 document load, the 401 fence, a unary RPC returning 200, and teardown leaving no
 orphan.
 
+### On the phone, 2026-10-06 (the phone, Android 16, release build)
+
+Six of the checks above were run on a real device, against a Windows host over Tailscale and
+a Linux host; the captures are in `.shots/`, which is gitignored because `tools/shot.ps1`
+writes there:
+
+- **The theme follows the system** — `cmd uimode night yes|no` plus a relaunch each
+  way: dark shell with `#5B9DFF`, light shell with `#2A63CC` (the accent the palette
+  test holds to 4.8:1). `phone-dark.png` / `phone-light.png`.
+- **Tapping a tab does not connect** — selecting `hp` moved the panel and left it
+  idle: no `SessionService` in `dumpsys activity services`, and `logcat` carried the
+  touch events and nothing else. `phone-tab-hp.png`.
+- **A refused connect is visible and retryable** — red dot, the reason, the
+  transcript, TRY AGAIN. `phone-failed.png`.
+- **It connects and renders** — green dot, the remote Harness in the WebView, two ssh
+  channels per session. `phone-copied-link.png`.
+- **The reconnect budget really ends** — airplane mode for 190 s (three 45 s readiness
+  timeouts) left **no** `SessionService`: the app stopped trying and stopped the
+  service. `phone-budget2.png`. This is the behaviour that was dead while the budget
+  was cleared on the way into a reconnect.
+- **The Windows launcher picks a `dsh` it can start** — the far-side transcript shows
+  `launch node=… script=…\@deepseek-ai\dsh\lib\bin.js exists=True`.
+
+Not settled on a device, and why:
+
+- **The forward's origin** — a tab must not render another tab's port. Triggering it
+  needs a page-initiated link to *another* loopback port; the Harness UI has none, and
+  `input tap` is refused by MIUI on this phone. Covered by construction only.
+- **The renderer dying** — `adb shell kill` on the WebView's sandboxed process answers
+  `Operation not permitted`, so it has to happen naturally under memory pressure.
+
 ## When the remote server ends by itself
 
 The whole client rests on one assumption: while the SSH session is up, so is the
