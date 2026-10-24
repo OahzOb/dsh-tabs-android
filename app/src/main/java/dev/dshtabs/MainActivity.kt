@@ -11,8 +11,10 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -525,6 +527,30 @@ class MainActivity : AppCompatActivity() {
 			}
 
 			/**
+			 * A main document the Harness refused with **431** has hit the one failure
+			 * this client itself owns: the cookie jar.
+			 *
+			 * The Harness names its cookie per forwarded authority (`dsh-auth-<hash of
+			 * host:port>`), and every reconnect forwards a **new** loopback port, so each
+			 * session leaves a 30-day cookie behind. Browsers send cookies by host and
+			 * ignore the port, so all of them ride on every request; past Node's 16 KB
+			 * header limit the answer is 431 before the token is even read, and no page
+			 * can load again until the jar is emptied. Dropping it is safe: the token in
+			 * the current URL mints a fresh cookie for this port on the next request.
+			 */
+			override fun onReceivedHttpError(
+				view: WebView,
+				request: WebResourceRequest,
+				response: WebResourceResponse
+			) {
+				if (!request.isForMainFrame || response.statusCode != 431) return
+				CookieManager.getInstance().removeAllCookies {
+					CookieManager.getInstance().flush()
+					view.loadUrl(request.url.toString())
+				}
+			}
+
+			/**
 			 * The renderer died — and the platform's default is to **kill the app**.
 			 *
 			 * `WebViewClient.onRenderProcessGone` returning `false`, which is what the
@@ -724,9 +750,21 @@ class MainActivity : AppCompatActivity() {
 				)
 			)
 			views[showing.device.id] = WebEntry(created, session.url)
-			// Only ever navigated once, when it is made. Every later render finds this
-			// entry and leaves it alone — that is the whole point.
-			created.loadUrl(session.url)
+			// The cookie jar is keyed by host while the Harness names its cookie per
+			// forwarded authority, so a tab that has reconnected many times drags a
+			// growing pile of dead 127.0.0.1 cookies into every request. Past the
+			// server's header limit the answer is 431 and no page can ever load, so an
+			// oversized jar is dropped first — the token mints a fresh cookie at once.
+			val jar = CookieManager.getInstance().getCookie(session.url)
+			fun load() = created.loadUrl(session.url)
+			if (jar != null && jar.length > 8000) {
+				CookieManager.getInstance().removeAllCookies {
+					CookieManager.getInstance().flush()
+					load()
+				}
+			} else {
+				load()
+			}
 			created
 		}
 
