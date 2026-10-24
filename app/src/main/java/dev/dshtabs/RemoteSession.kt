@@ -216,13 +216,28 @@ class RemoteSession private constructor(
 							// JSch sends the keepalive only if this property is set: the interval
 							// alone is not enough, and without the property the setting is
 							// silently ignored.
-							put("ServerAliveInterval", "20")
+							// JSch measures this in **milliseconds**, like OpenSSH's own
+							// `ServerAliveInterval` is measured in seconds — the number is
+							// not the same quantity under the two names. A literal `20`
+							// here asks for a keepalive every 20 ms, fifty per second, and
+							// the connection does not survive the resulting burst.
+							put("ServerAliveInterval", "20000")
 							put("ServerAliveCountMax", "3")
 							System.setProperty("jsch.keepalive.message", "true")
 						})
 						if (credential is Credential.Password) setPassword(credential.secret)
-						timeout = CONNECT_TIMEOUT_MS
+						// **`timeout` is not a connect timeout.** JSch uses this field as
+						// the socket's SO_TIMEOUT for the whole life of the session, so a
+						// value set here disconnects a perfectly healthy but quiet session
+						// that many seconds after its last byte — and the keepalive below
+						// fires on the same interval, so it can never win that race. The
+						// handshake is bounded by the `connect(...)` argument instead, and
+						// liveness is the keepalive's job: 20 s x 3 misses = 60 s to notice
+						// a peer that is truly gone.
 						connect(CONNECT_TIMEOUT_MS)
+						// Clear any read timeout the handshake left on the socket: the
+						// session is idle by design between UI requests.
+						timeout = 0
 					}
 
 					// `uname -s` is one argv element with no metacharacters, so it survives
@@ -361,9 +376,13 @@ class RemoteSession private constructor(
 				thread(isDaemon = true, name = "dsh-ready${prefix.trim()}") {
 					val buffer = ByteArray(4096)
 					try {
-						while (!done.get()) {
+						while (true) {
 							val read = stream.read(buffer)
 							if (read < 0) break
+							// Keep draining after the readiness line: the channel's pipe is
+							// small and the far side keeps writing, so a reader that walks
+							// away can stall — or close — a channel the session still needs.
+							if (done.get()) continue
 							val chunk = String(buffer, 0, read, Charsets.UTF_8)
 							chunk.split("\n").forEach { line ->
 								if (line.isNotBlank()) note(prefix + line.trimEnd('\r'))
