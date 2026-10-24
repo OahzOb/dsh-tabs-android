@@ -207,20 +207,20 @@ class RemoteSession private constructor(
 							//
 							// The Harness UI holds a long-lived channel open and otherwise sits
 							// silent, and a NAT — a phone's carrier, or the path Tailscale takes —
-							// drops a connection that stops producing packets. Measured: a session
-							// that had authenticated and loaded the interface reported
-							// `connection lost, retry #1…#7` about twenty seconds in, while the
-							// server logged no disconnect at all, which is what a silently
-							// dropped idle connection looks like from both ends.
+							// drops a connection that stops producing packets. This is the only
+							// defence against that: JSch sends the keepalive only when this
+							// property is set, and the interval alone is silently ignored.
 							//
-							// JSch sends the keepalive only if this property is set: the interval
-							// alone is not enough, and without the property the setting is
-							// silently ignored.
-							// JSch measures this in **milliseconds**, like OpenSSH's own
-							// `ServerAliveInterval` is measured in seconds — the number is
-							// not the same quantity under the two names. A literal `20`
-							// here asks for a keepalive every 20 ms, fifty per second, and
-							// the connection does not survive the resulting burst.
+							// **The interval is in milliseconds.** OpenSSH's option of the same
+							// name is in seconds, and that is a different quantity: a literal
+							// `20` here asks for a keepalive every 20 ms, fifty a second, which
+							// is a flood rather than a keepalive.
+							//
+							// The `connection lost, retry #1…#7` once measured about twenty
+							// seconds into a session was not this: it was the exec channel
+							// closing under a healthy session because its readers had stopped.
+							// See "The channel that was read to the readiness line and then
+							// abandoned" in the README.
 							put("ServerAliveInterval", "20000")
 							put("ServerAliveCountMax", "3")
 							System.setProperty("jsch.keepalive.message", "true")

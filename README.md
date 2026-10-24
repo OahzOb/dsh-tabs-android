@@ -1124,8 +1124,10 @@ this port on the next request. The client now does it in two places: before a lo
 `CookieManager.getCookie()` already exceeds 8000 characters, and once more on a
 main-frame 431 before reloading.
 
-It became reachable with `0.2.1-rc.3`, whose per-authority cookie naming is what makes
-the jar grow by one cookie per reconnect instead of staying at one.
+It became reachable after the `0.2.1-rc.3` update: the cookie naming that carries the
+forwarded port is what makes the jar grow by one cookie per reconnect instead of staying
+at one. That the two coincided is measured; that the naming is what changed in that
+version is the reading of the code, not of its history.
 
 ## Two JSch settings that are not what their names say
 
@@ -1133,7 +1135,7 @@ Both were in the code, both read as ordinary, and neither is:
 
 - **`ServerAliveInterval` is milliseconds**, while OpenSSH's option of the same name is
   in seconds. `put("ServerAliveInterval", "20")` asks for a keepalive every 20 ms —
-  fifty a second — and the connection does not survive the burst.
+  fifty a second, which is a flood rather than a keepalive.
 - **`Session.timeout` is not a connect timeout.** JSch applies it as the socket's
   `SO_TIMEOUT` for the whole session, so a session that is idle by design — which this
   one is between UI requests — disconnects itself that many seconds after its last
