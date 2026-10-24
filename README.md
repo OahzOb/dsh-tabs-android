@@ -1058,6 +1058,88 @@ reporting it again, refuse a changed one — with no device, no session and no s
 had no test at all before that round, which the suite's own count makes plain: 18
 checks then, 22 now.
 
+## The channel that was read to the readiness line and then abandoned
+
+A tab that connects, loads the interface, and then dies eleven seconds later — every
+time — with a transcript that says only:
+
+```
+[16:01:59] connect 74831@…:22
+[16:01:59] remote program: powershell
+```
+
+The line that settles it is the watcher's own state:
+
+```
+alive=false session=true channel=false status=-1
+```
+
+The SSH session is healthy. **Only the exec channel closed** — and on the far side the
+`dsh web` it started is still running, still listening, with nothing attached to it.
+Calling that "the server stopped" was the wrong reading, and it is what the code did,
+once per reconnect.
+
+The cause is in `awaitReady`. Its two reader threads exist to find the readiness line,
+and they exited as soon as they found it (`while (!done.get())`) while the far side kept
+writing — model-list lines, plugin chatter, the Harness's own log. The channel then
+closed with the session still up, and JSch said nothing about it at the session level.
+Whichever end gives up first inside JSch, the observable rule is the same: **an exec
+channel has to be read for as long as it exists.**
+
+So `done` no longer ends the readers; it ends only the *parsing*:
+
+```kotlin
+while (true) {
+    val read = stream.read(buffer)
+    if (read < 0) break
+    if (done.get()) continue        // keep the channel moving
+    …
+}
+```
+
+Measured after the fix, on the host that reproduced it: one SSH login in 70 seconds,
+against one every eleven before.
+
+## The 431 that a valid token cannot fix
+
+The interface failed to load with `net::ERR_HTTP_RESPONSE_CODE_FAILURE`, while the token
+in that very URL was demonstrably good — `curl` through the same forward answered
+**303** — and the server's request log had nothing for the navigation at all. Nothing
+arrived, so nothing could be logged: Node answers **431 Request Header Fields Too Large**
+before the request handler runs.
+
+The header that grows is `Cookie`. The Harness names its cookie per forwarded authority
+(`dsh-auth-<hash of host:port>`), and every reconnect forwards a **new** loopback port,
+so each session leaves a 30-day cookie behind. Browsers key cookies by host and ignore
+the port, so every one of them rides on every request, and past Node's 16 KB default the
+server refuses before it reads the token:
+
+```
+$ curl -H "Cookie: dsh-auth-test=<20 KB of x>" 'http://127.0.0.1:<port>/?token=…'  → 431
+$ curl -H "Cookie: a=b"                        'http://127.0.0.1:<port>/?token=…'  → 303
+```
+
+Clearing the jar is safe because the token in the current URL mints a fresh cookie for
+this port on the next request. The client now does it in two places: before a load when
+`CookieManager.getCookie()` already exceeds 8000 characters, and once more on a
+main-frame 431 before reloading.
+
+It became reachable with `0.2.1-rc.3`, whose per-authority cookie naming is what makes
+the jar grow by one cookie per reconnect instead of staying at one.
+
+## Two JSch settings that are not what their names say
+
+Both were in the code, both read as ordinary, and neither is:
+
+- **`ServerAliveInterval` is milliseconds**, while OpenSSH's option of the same name is
+  in seconds. `put("ServerAliveInterval", "20")` asks for a keepalive every 20 ms —
+  fifty a second — and the connection does not survive the burst.
+- **`Session.timeout` is not a connect timeout.** JSch applies it as the socket's
+  `SO_TIMEOUT` for the whole session, so a session that is idle by design — which this
+  one is between UI requests — disconnects itself that many seconds after its last
+  byte. The handshake is bounded by `connect(…)`'s argument; liveness is the keepalive's
+  job.
+
 ## The connect attempt that nobody owned
 
 The teardown contract above is stated in terms of a session someone is holding. This is
@@ -1154,13 +1236,17 @@ hold a foreground service and a notification up for ever.
   app on the phone can reach the forwarded port. It is the library's forward, so
   nothing here can change it beyond what the Harness itself does — and it is the
   reason the URL carries a token at all.
-- **A Windows remote launched through `Start-Process` can fail on a profile
-  junction.** Seen once against the build machine itself: `dsh` could not `realpath`
-  a `node_modules` junction and exited, while the identical command typed at a
-  prompt booted the same profile fine. The desktop app's Windows branch runs the
-  same program and is documented as working against a real Windows host, so this
-  looks specific to a profile with linked plugins rather than to the branch — but it
-  is written down because it cost an hour to find and would cost another.
+- **A Windows remote with linked profile plugins can fail before it announces a URL.**
+  `dsh` resolves every profile link with `realpathSync.native`, which can answer
+  `UNKNOWN/-4094` for a junction inside an sshd logon session — and the boot dies
+  *before* the readiness line, so the client reports "the Harness never announced a URL"
+  while the far side's console blames a plugin that is installed. Measured on the build
+  machine: 4 failures out of 4 over ssh against 0 from an interactive shell in the same
+  minutes. It is not a one-off: `dsh` 0.2.1-rc.3's own update reinstalled the `web`
+  profile and re-created the very links that had been replaced by real directories. The
+  workaround on that machine is `.dsh/sync-web-profile.ps1` — the profile holds copies,
+  and the script refreshes them after a plugin edit. The durable fix belongs in the
+  boot: skip a link that will not resolve, and say which.
 - **The desktop client's Windows branch has converged, and the parity test is what
   found the gap.** This client resolves `node` itself, reports what it resolved, and
   watches the child for 60 seconds so a `dsh` that exits without announcing a URL
@@ -1171,12 +1257,9 @@ hold a foreground service and a notification up for ever.
   **byte-identical**; the parity test asserts equality rather than the fragment list
   it used for as long as they differed.
 
-  What neither client could do is verify it against a real Windows remote: the
-  machine that would have been the subject (`box-b`) was unreachable throughout, and
-  a Windows host is the only place this branch can be exercised. The desktop side is
-  therefore a faithful copy of a program this client has run for real, not an
-  independent implementation — which is the most confidence available without the
-  host, and the reason it was copied rather than rewritten smaller.
+  Both clients have now been run against a real Windows host — the build machine, which
+  is the same machine `box-b` stood in for. What that round cost is written down above:
+  the profile-link failure, the 431 behind a valid token, and the abandoned channel.
 - **Sessions belong to the activity, not to the process.** So a configuration change
   that destroys the activity drops every connection and the operator connects again.
   Rotating does not — that is in `configChanges` on purpose — but changing the system
