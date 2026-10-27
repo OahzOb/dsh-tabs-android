@@ -20,6 +20,7 @@ import java.util.Properties
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
@@ -161,6 +162,42 @@ class RemoteSession private constructor(
 			onLine: (String) -> Unit,
 			onHostKey: (String) -> Unit = {},
 			commandOverride: String? = null
+		): SessionStart {
+			// **A session can be created and then never delivered.** `openInternal` runs
+			// on `Dispatchers.IO`; if the caller is cancelled while it is inside one of
+			// the blocking JSch calls, the cancellation is observed at the `withContext`
+			// boundary — *after* the block has returned `SessionStart.Ok` — and the value
+			// is discarded. The block's own `catch (CancellationException)` cannot see
+			// that, so `fail` never runs and a caller that only holds the returned result
+			// has nothing to stop. The resources are therefore registered as they are
+			// created, and this `finally` stops a session that never comes back.
+			val opened = OpenedResources()
+			var delivered = false
+			try {
+				val result = openInternal(device, credential, opened, onLine, onHostKey, commandOverride)
+				// `Ok` is the only result that carries ownership. A `Failed` result has
+				// already asked `fail` to close what it opened, and releasing again is
+				// safe and covers a disconnect that threw; a discarded `Ok` never reaches
+				// the caller at all.
+				delivered = result is SessionStart.Ok
+				return result
+			} finally {
+				if (!delivered) opened.release()
+			}
+		}
+
+		/**
+		 * The connect itself; [open] owns the release of anything this creates.
+		 *
+		 * @param opened the resource registry, filled as each resource comes up.
+		 */
+		private suspend fun openInternal(
+			device: Device,
+			credential: Credential,
+			opened: OpenedResources,
+			onLine: (String) -> Unit,
+			onHostKey: (String) -> Unit,
+			commandOverride: String?
 		): SessionStart =
 			withContext(Dispatchers.IO) {
 				val lines = mutableListOf<String>()
@@ -192,7 +229,7 @@ class RemoteSession private constructor(
 						)
 					}
 
-					session = jsch.getSession(device.user, device.host, device.sshPort).apply {
+					val connected = jsch.getSession(device.user, device.host, device.sshPort).apply {
 						// Host key verification is ours, so JSch must not also do its own:
 						// `ask`/`yes` would consult a store this app does not keep, and `no`
 						// accepts a *changed* key silently. See TrustOnFirstUse.
@@ -239,13 +276,18 @@ class RemoteSession private constructor(
 						// session is idle by design between UI requests.
 						timeout = 0
 					}
+					// Registered as soon as the session exists, not when the `RemoteSession`
+					// wrapper is built: everything below can block, and a cancellation at the
+					// `withContext` boundary must still have something to disconnect.
+					session = connected
+					opened.session(connected)
 
 					// `uname -s` is one argv element with no metacharacters, so it survives
 					// every shell: a POSIX host answers on stdout while cmd.exe and
 					// PowerShell fail the command and print nothing. There is no exit code
 					// to inspect any more — an exception is the connection failure, which is
 					// one fewer way to be wrong than the desktop branch's code 255.
-					val platform = device.platform ?: runProbe(session).also {
+					val platform = device.platform ?: runProbe(connected).also {
 						note("remote platform: ${if (it == Remote.Platform.WINDOWS) "windows" else "posix"}")
 					}
 
@@ -259,16 +301,18 @@ class RemoteSession private constructor(
 						return@withContext fail(problem, session, channel, lines)
 					}
 
-					channel = session.openChannel("exec") as ChannelExec
-					channel.setCommand(
+					val exec = connected.openChannel("exec") as ChannelExec
+					channel = exec
+					opened.channel(exec)
+					exec.setCommand(
 						commandOverride ?: Remote.remoteCommand(Remote.remoteProgram(device.directory, platform), platform)
 					)
 					// stdout has to be asked for before connect(), or JSch hands back a
 					// stream that never carries the readiness line.
-					val stdout = channel.inputStream
-					val stderr = channel.getErrStream()
-					val sink = channel.outputStream
-					channel.connect(CONNECT_TIMEOUT_MS)
+					val stdout = exec.inputStream
+					val stderr = exec.getErrStream()
+					val sink = exec.outputStream
+					exec.connect(CONNECT_TIMEOUT_MS)
 					note("remote program: ${if (platform == Remote.Platform.WINDOWS) "powershell" else "bash"}")
 
 					val ready = awaitReady(stdout, stderr, note)
@@ -281,25 +325,25 @@ class RemoteSession private constructor(
 					// Port 0 asks the OS for a free one and returns it, which is exactly what
 					// `ssh -L` does — the desktop app has to allocate its own port and hope
 					// nothing takes it in the gap.
-					val bound = session.setPortForwardingL(0, "127.0.0.1", parsed.port)
+					val bound = connected.setPortForwardingL(0, "127.0.0.1", parsed.port)
 					note("tunnel 127.0.0.1:$bound -> 127.0.0.1:${parsed.port}")
 
 					// Latch the key before tearing the repository down, and hand it over
 					// only now that the whole connect has worked.
 					learned.get()?.let(onHostKey)
 
-					SessionStart.Ok(
-						RemoteSession(
-							session = session,
-							channel = channel,
-							stdin = sink,
-							localPort = bound,
-							remotePort = parsed.port,
-							token = parsed.token,
-							platform = platform,
-							transcript = synchronized(lines) { lines.toList() }
-						)
+					val handle = RemoteSession(
+						session = connected,
+						channel = exec,
+						stdin = sink,
+						localPort = bound,
+						remotePort = parsed.port,
+						token = parsed.token,
+						platform = platform,
+						transcript = synchronized(lines) { lines.toList() }
 					)
+					opened.remote(handle)
+					SessionStart.Ok(handle)
 				} catch (error: CancellationException) {
 					// **Cancellation is not a failure to report, and it is not an ordinary
 					// exception.** It arrives here like any other, and swallowing it would
@@ -336,9 +380,35 @@ class RemoteSession private constructor(
 			probe.setCommand("uname -s")
 			val out = probe.inputStream
 			probe.connect(CONNECT_TIMEOUT_MS)
-			val text = out.readBytes().toString(Charsets.UTF_8)
-			probe.disconnect()
-			return Remote.classifyPlatform(0, text).platform ?: Remote.Platform.POSIX
+			return try {
+				// **`connect` bounds the handshake; nothing bounded the read.** A host
+				// that accepts the channel and then goes quiet — a login shell hanging
+				// on an rc file, a `uname` that never exits — used to hold the whole
+				// connect open with no deadline, and a cancel then had a live session
+				// with nothing watching it. The read runs on a daemon thread so the
+				// deadline belongs to this call rather than to the socket.
+				val future = CompletableFuture<ByteArray>()
+				thread(isDaemon = true, name = "dsh-probe") {
+					try {
+						future.complete(out.readBytes())
+					} catch (error: Exception) {
+						future.completeExceptionally(error)
+					}
+				}
+				val text = String(future.get(CONNECT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS), Charsets.UTF_8)
+				Remote.classifyPlatform(0, text).platform ?: Remote.Platform.POSIX
+			} catch (error: Exception) {
+				throw IllegalStateException(
+					"the platform probe did not answer within ${CONNECT_TIMEOUT_MS / 1000}s",
+					error
+				)
+			} finally {
+				try {
+					probe.disconnect()
+				} catch (_: Exception) {
+					/* already gone */
+				}
+			}
 		}
 
 		/**
@@ -427,6 +497,52 @@ class RemoteSession private constructor(
 		}
 
 		private data class Ready(val url: String? = null, val error: String? = null)
+	}
+}
+
+/**
+ * The resources one connect has opened, registered as each one appears.
+ *
+ * **A result is not the only thing a connect can produce.** `RemoteSession.open` is
+ * `withContext(Dispatchers.IO) { … }`; a cancellation while its blocking JSch calls
+ * are running is observed at that boundary, *after* the block has returned `Ok`, so
+ * the value is discarded and no caller ever sees the session. The block's own
+ * `catch (CancellationException)` cannot see it either — it runs inside the block.
+ * Registering the session and channel the moment they are usable is what gives the
+ * outer `finally` a reference to stop, and it also covers a throw after the point
+ * where `SessionStart.Ok` was constructed but before the wrapper can be built.
+ *
+ * The references are atomic because they are written on the IO dispatcher and read
+ * from the caller's dispatcher when the result is released.
+ */
+private class OpenedResources {
+	private val sessionRef = AtomicReference<Session?>(null)
+	private val channelRef = AtomicReference<ChannelExec?>(null)
+	private val remoteRef = AtomicReference<RemoteSession?>(null)
+
+	/** Register the SSH session as soon as it has connected. */
+	fun session(value: Session) {
+		sessionRef.set(value)
+	}
+
+	/** Register the exec channel as soon as it exists. */
+	fun channel(value: ChannelExec) {
+		channelRef.set(value)
+	}
+
+	/** Register the wrapper as soon as it has been built. */
+	fun remote(value: RemoteSession) {
+		remoteRef.set(value)
+	}
+
+	/**
+	 * Stop whatever was registered. Safe to call more than once: the connect's own
+	 * failure paths close some of these, and the outer `finally` may run after them.
+	 */
+	fun release() {
+		remoteRef.get()?.let { opened -> runCatching { opened.stop() } }
+		runCatching { channelRef.get()?.disconnect() }
+		runCatching { sessionRef.get()?.disconnect() }
 	}
 }
 
