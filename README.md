@@ -458,7 +458,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 22 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 25 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
@@ -1056,7 +1056,7 @@ reason `HostKeys.kt` exists: `TrustOnFirstUseTest` drives `TrustOnFirstUse.check
 directly — accept an unknown host and report its key, accept a pinned key without
 reporting it again, refuse a changed one — with no device, no session and no socket. It
 had no test at all before that round, which the suite's own count makes plain: 18
-checks then, 22 now.
+checks then, 25 now.
 
 ## The channel that was read to the readiness line and then abandoned
 
@@ -1173,6 +1173,15 @@ Three statements fix it, and each is load-bearing:
    This is the one that actually closes the leak: a `RemoteSession` that comes back to a
    cancelled coroutine is stopped by the attempt that opened it, at the last moment
    anything in the process still knows it exists.
+
+The `finally` only helps when the result comes back. `RemoteSession.open` runs its
+connect in `withContext`, and a cancellation observed at that boundary discards the
+`SessionStart.Ok` value *after* the block has returned it: the block's own
+`catch (CancellationException)` never runs, `opened` in `startSession` stays null, and
+the `finally` above had nothing to stop. That window was closed in the same change as
+this note: the session and channel are registered as they are created
+(`OpenedResources`), and an outer `finally` in `open` releases them when the result was
+not delivered. Ownership is the resources', not the result's.
 
 Removing a machine takes its attempt with it (`Tab.stop()` cancels the coroutine before
 dropping the tab), because that path had a second failure stacked on the first: the
