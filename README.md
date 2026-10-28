@@ -486,7 +486,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 25 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 28 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
@@ -1084,7 +1084,7 @@ reason `HostKeys.kt` exists: `TrustOnFirstUseTest` drives `TrustOnFirstUse.check
 directly — accept an unknown host and report its key, accept a pinned key without
 reporting it again, refuse a changed one — with no device, no session and no socket. It
 had no test at all before that round, which the suite's own count makes plain: 18
-checks then, 25 now.
+checks then, 28 now.
 
 ## The channel that was read to the readiness line and then abandoned
 
