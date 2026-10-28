@@ -6,6 +6,10 @@
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+	<!-- The sideload update channel hands a verified APK to the system installer.
+	     This is the special permission Android gates behind "Install unknown apps";
+	     without it the installer intent is refused, not silently ignored. -->
+	<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
 	<application
 		android:name=".App"
@@ -16,6 +20,21 @@
 		android:supportsRtl="true"
 		android:theme="@style/Theme.DshTabs"
 		android:usesCleartextTraffic="false">
+
+		<!--
+			The update APK lives in the app's private cache, and the system installer is
+			a different process. This is the read-only grant that lets it open the file;
+			it is not exported and no other app can use the authority.
+		-->
+		<provider
+			android:name="androidx.core.content.FileProvider"
+			android:authorities="${applicationId}.updates"
+			android:exported="false"
+			android:grantUriPermissions="true">
+			<meta-data
+				android:name="android.support.FILE_PROVIDER_PATHS"
+				android:resource="@xml/update_paths" />
+		</provider>
 
 		<activity
 			android:name=".MainActivity"

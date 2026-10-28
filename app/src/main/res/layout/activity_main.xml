@@ -37,6 +37,18 @@
 				android:paddingEnd="6dp" />
 		</HorizontalScrollView>
 
+		<!-- The update check has its own control rather than hiding in a menu: a
+		     sideloaded app has no store to push a new version, and an update nobody
+		     can find is the same as no updater at all. -->
+		<ImageButton
+			android:id="@+id/update"
+			android:layout_width="44dp"
+			android:layout_height="match_parent"
+			android:background="?android:attr/selectableItemBackground"
+			android:contentDescription="@string/check_updates"
+			android:src="@android:drawable/ic_popup_sync"
+			android:tint="@color/dim" />
+
 		<ImageButton
 			android:id="@+id/add"
 			android:layout_width="44dp"

@@ -86,6 +86,21 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 Building it yourself means signing it with your own key, which is the right thing to
 do if you intend to keep it. See "Building" and "Signing" below.
 
+### Updates
+
+Versions from `0.2.0` check GitHub Releases once a day at launch, and the sync control
+in the tab bar checks immediately. A newer release is offered with its notes; the APK
+is downloaded only when **Download** is tapped, its SHA-256 and signing certificate are
+checked against this install, and Android's own installer asks for confirmation.
+
+The check is a plain unauthenticated GET to GitHub's public release API. It sends no
+device, book or session data; what is downloaded is trusted through GitHub over HTTPS
+and the APK's signature, which is the same key that signed the installed app. Android
+still shows its own "install unknown apps" permission the first time.
+
+**The first update has to be installed by hand** if the version already on the phone
+predates `0.2.0`: that build is the one without the updater.
+
 ## Using it
 
 - **`+`** adds a machine. It needs a host, an SSH user, and — until the app's key is
@@ -94,7 +109,8 @@ do if you intend to keep it. See "Building" and "Signing" below.
 - **SSH key…** in the same dialog generates the app's own key and shows the line to
   paste into that machine's `authorized_keys`. Once a machine has it, connecting
   never asks for anything.
-- **Tap a tab** to connect it, or to bring it back if it is already up.
+- **Tap a tab** to select it; the panel's **Connect** starts the connection. A stray
+  tap on a sleeping tab does not dial out.
 - **`×`** disconnects. The tab stays, because a tab is a configured machine, not a
   transient view.
 - **Long-press a tab** to edit or remove the machine.
@@ -199,13 +215,25 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 自己构建就是用你自己的密钥签名 —— 如果你打算长期用，这是正确的做法。细节见下面的
 "Building" 与 "Signing"。
 
+### 更新
+
+从 `0.2.0` 起，应用启动时每天最多检查一次 GitHub Releases，标签栏里的同步按钮则立即检查。
+发现新版本会先给出说明；只有点 **Download** 才会下载，下载后用 SHA-256 和签名证书与已安装
+版本比对，再交给 Android 系统安装器让用户确认。
+
+检查是一次不带凭据的 GitHub 公共 Release API GET，不发送设备、设备簿或会话数据；下载内容
+的信任来自 GitHub HTTPS 加 APK 签名，也就是给已安装版本签名的那把密钥。Android 仍会在第一次
+安装时弹出"安装未知应用"的授权。
+
+**如果手机上已有的版本早于 `0.2.0`，第一次仍然要手动安装** —— 那个版本本身还没有更新器。
+
 ## 用法
 
 - **`+`** 添加机器。需要主机、SSH 用户，以及密码（在那台机器上有本应用公钥之前）。密码只
   用于这次连接、**从不保存**；密码错了会重新询问而不是反复重试。
 - 同一个对话框里的 **SSH key…** 生成应用自己的密钥，并给出要粘进那台机器
   `authorized_keys` 的那一行。机器有了它之后，连接就不再问任何东西。
-- **点标签页**连接，或把它（已经连着的）调到前面。
+- **点标签页**只是选中它；要用面板里的 **Connect** 才开始连接。误触一个休眠的标签页不会拨号。
 - **`×`** 断开。标签页保留 —— 标签页是一台配置好的机器，不是临时视图。
 - **长按标签页**编辑或删除这台机器。
 

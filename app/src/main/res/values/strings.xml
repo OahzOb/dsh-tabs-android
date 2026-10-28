@@ -40,7 +40,7 @@
 	<string name="key_generate">Generate a key</string>
 	<string name="key_copy">Copy the public key</string>
 	<string name="key_replace">Replace it…</string>
-	<string name="key_howto">Add this line to ~/.ssh/authorized_keys on the machine, then connect. The private half never leaves this phone.\n\nOn an administrator account on Windows the file is %ProgramData%\\ssh\\administrators_authorized_keys instead, and its permissions have to be restricted to SYSTEM and Administrators or sshd ignores it.</string>
+	<string name="key_howto" formatted="false">Add this line to ~/.ssh/authorized_keys on the machine, then connect. The private half never leaves this phone.\n\nOn an administrator account on Windows the file is %ProgramData%\\ssh\\administrators_authorized_keys instead, and its permissions have to be restricted to SYSTEM and Administrators or sshd ignores it.</string>
 	<string name="key_replace_confirm">Replace the key?\n\nEvery machine that already has the current public key in its authorized_keys will refuse this app until you paste the new one there. The old key cannot be removed for you — this app cannot reach into those files.</string>
 	<string name="key_copied">Public key copied</string>
 	<string name="key_generated">Key generated</string>
@@ -52,4 +52,21 @@
 	<string name="notif_channel_desc">Keeps the SSH connection to a remote machine alive while the app is in the background.</string>
 	<string name="notif_title">Connected to %1$s</string>
 	<string name="notif_text">The Harness on %1$s stays reachable while this is showing.</string>
+
+	<!-- the sideload update channel -->
+	<string name="check_updates">Check for updates</string>
+	<string name="update_checking">Checking for updates…</string>
+	<string name="update_current">This is the latest version.</string>
+	<string name="update_failed">Update check failed: %1$s</string>
+	<string name="update_failed_title">Update failed</string>
+	<string name="update_available">Version %1$s is available</string>
+	<string name="update_no_notes">No release notes were provided.</string>
+	<string name="update_download">Download</string>
+	<string name="update_later">Later</string>
+	<string name="update_downloading">Downloading %1$s…</string>
+	<string name="update_permission_title">Allow installs</string>
+	<string name="update_allow_install">Android needs permission to install this update. Enable “Install unknown apps” for dsh-tabs in Settings, then check again.</string>
+	<string name="update_open_settings">Open settings</string>
+	<string name="update_installing">Opening the installer…</string>
+	<string name="update_bad_apk">The downloaded update could not be verified: %1$s</string>
 </resources>
