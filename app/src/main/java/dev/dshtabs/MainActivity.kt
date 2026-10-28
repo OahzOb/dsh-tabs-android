@@ -2,12 +2,15 @@ package dev.dshtabs
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
@@ -22,6 +25,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.MainThread
@@ -36,6 +40,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.CompletableFuture
 import kotlin.coroutines.resume
 
@@ -148,6 +153,7 @@ class MainActivity : AppCompatActivity() {
 	private lateinit var panelAction: android.widget.Button
 	private lateinit var panelTranscript: TextView
 	private lateinit var panelTranscriptLabel: TextView
+	private lateinit var updateButton: ImageButton
 
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
@@ -187,6 +193,8 @@ class MainActivity : AppCompatActivity() {
 		// that has to be made before any of them exists lives in `onCreate` below.
 		WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 		findViewById<ImageButton>(R.id.add).setOnClickListener { showDeviceDialog(null) }
+		updateButton = findViewById(R.id.update)
+		updateButton.setOnClickListener { checkForUpdates(manual = true) }
 		applyWindowInsets()
 		// Called at startup as well as on a mode change, so the two paths cannot
 		// disagree about what this window looks like. See `applyChromeColors`.
@@ -195,6 +203,7 @@ class MainActivity : AppCompatActivity() {
 		loadBook()
 		render()
 		askForNotifications()
+		maybeCheckForUpdates()
 	}
 
 	/**
@@ -396,6 +405,7 @@ class MainActivity : AppCompatActivity() {
 		findViewById<View>(R.id.root).setBackgroundColor(bg)
 		findViewById<View>(R.id.bar).setBackgroundColor(bar)
 		findViewById<ImageButton>(R.id.add).setColorFilter(dim)
+		updateButton.setColorFilter(dim)
 
 		panelTitle.setTextColor(fg)
 		panelReason.setTextColor(dim)
@@ -1431,6 +1441,130 @@ class MainActivity : AppCompatActivity() {
 
 	// ------------------------------------------------------------------ misc
 
+	// ----------------------------------------------------------------- updates
+
+	/**
+	 * Check for a newer release once a day, on launch, without saying anything when
+	 * there is nothing to say.
+	 *
+	 * The timestamp is written **before** the request: a phone that cannot reach
+	 * GitHub would otherwise retry on every launch, and the one thing an update
+	 * check must not do is become a startup tax. The manual control is the retry.
+	 */
+	private fun maybeCheckForUpdates() {
+		val preferences = getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE)
+		val now = System.currentTimeMillis()
+		if (now - preferences.getLong(KEY_LAST_CHECK, 0L) < UPDATE_INTERVAL_MS) return
+		preferences.edit().putLong(KEY_LAST_CHECK, now).apply()
+		lifecycleScope.launch {
+			val result = Updates.check()
+			if (result is Updates.Check.Newer && !isFinishing && !isDestroyed) showUpdate(result.update)
+		}
+	}
+
+	/**
+	 * Check from the sync button, and report the answer either way.
+	 *
+	 * @param manual whether the operator asked, which is the only case that shows
+	 *   "up to date" or an error.
+	 */
+	private fun checkForUpdates(manual: Boolean) {
+		if (manual) toast(getString(R.string.update_checking))
+		lifecycleScope.launch {
+			when (val result = Updates.check()) {
+				is Updates.Check.Newer -> showUpdate(result.update)
+				is Updates.Check.Current -> if (manual) toast(getString(R.string.update_current))
+				is Updates.Check.Failed -> if (manual) toast(getString(R.string.update_failed, result.reason))
+			}
+		}
+	}
+
+	/**
+	 * Offer a newer release, with its notes, and download only if the operator says so.
+	 * @param update - the release the check found.
+	 */
+	private fun showUpdate(update: Updates.Available) {
+		if (isFinishing || isDestroyed) return
+		val notes = update.notes.take(4000).ifBlank { getString(R.string.update_no_notes) }
+		AlertDialog.Builder(this)
+			.setTitle(getString(R.string.update_available, update.version))
+			.setMessage(notes)
+			.setPositiveButton(R.string.update_download) { _, _ -> downloadUpdate(update) }
+			.setNegativeButton(R.string.update_later, null)
+			.show()
+	}
+
+	/**
+	 * Download and verify a release, with a progress bar, then hand it to the installer.
+	 * @param update - the release to download.
+	 */
+	private fun downloadUpdate(update: Updates.Available) {
+		val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+			max = 100
+			isIndeterminate = update.size <= 0L
+		}
+		val dialog = AlertDialog.Builder(this)
+			.setTitle(getString(R.string.update_downloading, update.version))
+			.setView(progress)
+			.setCancelable(false)
+			.create()
+		dialog.show()
+		lifecycleScope.launch {
+			val result = Updates.download(this@MainActivity, update) { percent ->
+				onMain { progress.progress = percent }
+			}
+			if (!isFinishing && !isDestroyed) dialog.dismiss()
+			when (result) {
+				is Updates.Download.Ready -> installUpdate(result.file)
+				is Updates.Download.Failed -> if (!isFinishing && !isDestroyed) {
+					AlertDialog.Builder(this@MainActivity)
+						.setTitle(R.string.update_failed_title)
+						.setMessage(getString(R.string.update_bad_apk, result.reason))
+						.setPositiveButton(android.R.string.ok, null)
+						.show()
+				}
+			}
+		}
+	}
+
+	/**
+	 * Hand a verified APK to the system installer, asking for the one permission that
+	 * gates it first.
+	 *
+	 * The permission is a system settings screen, not a runtime dialog: Android does
+	 * not let an app prompt for "install unknown apps" itself, and MIUI adds its own
+	 * confirmation on top. The app's job is to say which screen and why.
+	 *
+	 * @param file - the verified APK.
+	 */
+	private fun installUpdate(file: File) {
+		if (!Updates.canInstall(this)) {
+			AlertDialog.Builder(this)
+				.setTitle(R.string.update_permission_title)
+				.setMessage(R.string.update_allow_install)
+				.setPositiveButton(R.string.update_open_settings) { _, _ ->
+					try {
+						startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+					} catch (_: Exception) {
+						try {
+							startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+						} catch (_: Exception) {
+							toast(getString(R.string.update_failed, "no settings screen"))
+						}
+					}
+				}
+				.setNegativeButton(R.string.cancel, null)
+				.show()
+			return
+		}
+		try {
+			Updates.install(this, file)
+			toast(getString(R.string.update_installing))
+		} catch (error: Throwable) {
+			toast(getString(R.string.update_failed, error.message ?: error.javaClass.simpleName))
+		}
+	}
+
 	private fun askForNotifications() {
 		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
 		if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
@@ -1461,5 +1595,14 @@ class MainActivity : AppCompatActivity() {
 
 		/** How long to wait before an automatic reconnect; the old server needs to go. */
 		const val RECONNECT_DELAY_MS = 2_500L
+
+		/** Where the update check's timestamp lives. */
+		const val UPDATE_PREFERENCES = "updates"
+
+		/** The last automatic update check, in epoch milliseconds. */
+		const val KEY_LAST_CHECK = "lastCheck"
+
+		/** How often the launch check may ask GitHub. */
+		const val UPDATE_INTERVAL_MS = 24L * 60L * 60L * 1_000L
 	}
 }

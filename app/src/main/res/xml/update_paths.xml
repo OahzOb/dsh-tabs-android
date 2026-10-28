@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	The one directory the update installer may read: `cacheDir/updates/`, where
+	`Updates.download` puts the verified APK. It is a cache path on purpose — the
+	file is disposable, and the system may reclaim it after an install or a reboot.
+-->
+<paths>
+	<cache-path name="updates" path="updates/" />
+</paths>
