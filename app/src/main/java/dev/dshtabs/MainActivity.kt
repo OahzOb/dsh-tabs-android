@@ -53,9 +53,12 @@ import kotlin.coroutines.resume
  *
  * Two things follow from that and are worth naming:
  *
- * - **A connection is owned here, not by the WebView.** The SSH session, the remote
- *   server and the port forward all outlive any particular page load, so switching
- *   tabs does not restart anything and a reload is just a reload.
+ * - **A connection is owned by the process, not by the WebView or by this window.** The
+ *   SSH session, the remote server and the port forward outlive any particular page
+ *   load, so switching tabs does not restart anything and a reload is just a reload.
+ *   A window that is recreated — a configuration change this activity does not handle,
+ *   or an OEM relaunch for split screen — hands its sessions to [Sessions] and the next
+ *   window adopts them, which is what keeps a resize from being a disconnect.
  * - **One WebView is reused for every tab.** Each session gets its own loopback
  *   origin (`127.0.0.1:<a fresh port>`), so the cookies the Harness issues are
  *   already partitioned per machine by the port number; a second WebView would buy
@@ -74,9 +77,10 @@ class MainActivity : AppCompatActivity() {
 	 * the session it opened has no owner — and nothing stopped the far side's
 	 * `dsh web`, which goes on holding the machine's port with no client anywhere that
 	 * knows it exists. That happens on three ordinary paths: a CONNECT on a second tab,
-	 * `stopEverything()` on back, and the activity's `lifecycleScope` at destroy. A
-	 * token carried by the tab separates "this attempt was cancelled" from "this tab is
-	 * no longer here at all", and either answer has to end in `session.stop()`.
+	 * a finishing destroy as the operator leaves the app, and the activity's
+	 * `lifecycleScope` at the destroy that recreates the window. A token carried by the
+	 * tab separates "this attempt was cancelled" from "this tab is no longer here at
+	 * all", and either answer has to end in `session.stop()`.
 	 */
 	private class Token
 
@@ -86,6 +90,16 @@ class MainActivity : AppCompatActivity() {
 		var session: RemoteSession? = null,
 		var error: String? = null,
 		var lines: List<String> = emptyList(),
+		/**
+		 * The page this tab's WebView is showing, which is not always the session's URL.
+		 *
+		 * A freshly opened session is loaded from `session.url`, whose token is a
+		 * one-time entry ticket. A session adopted from [Sessions] has already spent
+		 * that token, so its page is the origin's root and the authentication is the
+		 * cookie the first load left in the jar. The reconciliation compares this
+		 * against the view it built, so the adopted page is not rebuilt on every render.
+		 */
+		var pageUrl: String? = null,
 		/** The attempt that owns this tab's connect, or a token nobody holds once one ends. */
 		var attempt: Token = Token(),
 		/** The connect coroutine, so × and `remove` can end an attempt that is in flight. */
@@ -97,10 +111,15 @@ class MainActivity : AppCompatActivity() {
 		 * Order matters in the same way it does inside [RemoteSession.stop]: the attempt
 		 * is cancelled first so that a result arriving afterwards is recognised as stale
 		 * and stopped rather than adopted.
+		 *
+		 * The registry entry goes with it. That is what makes × mean "disconnect" even
+		 * for a session this window adopted rather than opened: the activity may not be
+		 * the object that created it, but it is the object that stops it.
 		 */
 		fun stop() {
 			connectJob?.cancel()
 			connectJob = null
+			Sessions.running.remove(device.id)?.stop()
 			session?.stop()
 			session = null
 		}
@@ -110,15 +129,32 @@ class MainActivity : AppCompatActivity() {
 	private var activeIndex = -1
 
 	/**
-	 * True once [onDestroy] has ended every session.
+	 * True once [onDestroy] has run.
 	 *
 	 * A cancelled attempt's `finally` still runs afterwards — it is a plain coroutine,
 	 * not a lifecycle-aware one, and cancelling it cannot stop a block that has already
-	 * begun — so it must not paint a window that is gone. It has nothing left to do for
-	 * the UI either way: the destroy already put every tab back to IDLE and stopped the
-	 * service.
+	 * begun — so it must not paint a window that is gone. It also must not decide the
+	 * service is idle from a `tabs` list whose sessions have just been handed to
+	 * [Sessions]: that is why [stopServiceIfIdle] reads this flag.
 	 */
 	private var destroyed = false
+
+	/**
+	 * What the registry calls when a session is adopted or given up.
+	 *
+	 * A property, not a lambda written at each call site: the registry removes an
+	 * observer by identity, and two evaluations of the same lambda expression are two
+	 * different objects. The post keeps rendering off the registry's update path, and
+	 * `destroyed` keeps a window that is already gone from drawing.
+	 */
+	private val sessionObserver: () -> Unit = {
+		tabsRow.post {
+			if (!destroyed) {
+				adoptRunningSessions()
+				render()
+			}
+		}
+	}
 
 	/** Passwords for this run only, keyed by device id. Never persisted. */
 	private val passwords = mutableMapOf<String, String>()
@@ -139,10 +175,11 @@ class MainActivity : AppCompatActivity() {
 	/**
 	 * The live pages, one per running session, keyed by device id.
 	 *
-	 * The entry remembers the URL it was built for, so a session that was torn down
-	 * and started again — a reconnect, which announces a new port and token — is
-	 * recognised as a different page and given a new view rather than being served
-	 * the old one.
+	 * The entry remembers the page it was built for — [Tab.pageUrl], which is the
+	 * token URL for a session this window opened and the origin root for one it adopted
+	 * — so a session that was torn down and started again (a reconnect, which announces
+	 * a new port and token) is recognised as a different page and given a new view
+	 * rather than being served the old one.
 	 */
 	private val views = mutableMapOf<String, WebEntry>()
 
@@ -201,9 +238,67 @@ class MainActivity : AppCompatActivity() {
 		applyChromeColors()
 
 		loadBook()
+		// A session can arrive after this window is built, if the destroy that handed it
+		// over runs after the create that follows it. The post keeps this out of the
+		// registry's own update path; see `SessionRegistry.observe`.
+		Sessions.running.observe(sessionObserver)
+		// After the book, because a session is attached to a tab and a tab only exists
+		// once its machine is known. See `adoptRunningSessions`.
+		adoptRunningSessions()
 		render()
 		askForNotifications()
 		maybeCheckForUpdates()
+	}
+
+	/**
+	 * Take back the sessions that survived this window's predecessor.
+	 *
+	 * **This is the other half of `onDestroy`'s non-finishing branch**, and without it
+	 * the registry is a leak: a session with no tab, a service holding the process up
+	 * and a `dsh web` nobody can reach. It runs before the first `render`, so the tab
+	 * that comes back says RUNNING rather than drawing CONNECT for a moment.
+	 *
+	 * A registered machine that is no longer in the book belongs to nothing — the only
+	 * way that happens is an edit that removed the tab between the destroy and this
+	 * create — so it is stopped here rather than left for the process to end.
+	 *
+	 * The page is loaded by `renderContent` from [Tab.pageUrl], which for an adopted
+	 * session is the origin root: the token in the original URL has been spent, and the
+	 * cookie the first load left behind is the credential that still works.
+	 */
+	private fun adoptRunningSessions() {
+		if (destroyed) return
+		val held = Sessions.running.snapshot()
+		if (held.isEmpty()) return
+
+		var first: Tab? = null
+		for (tab in tabs) {
+			if (tab.session != null) continue
+			val session = held[tab.device.id] ?: continue
+			tab.session = session
+			tab.state = State.RUNNING
+			tab.pageUrl = pageUrlFor(session)
+			if (first == null) first = tab
+		}
+
+		for ((id, session) in held) {
+			if (tabs.none { it.device.id == id }) {
+				Sessions.running.remove(id)
+				session.stop()
+			}
+		}
+
+		// The service is what keeps the process — and the tunnel inside it — out of the
+		// cached state. A recreate can have raced its own stop on the way out, so this
+		// asks for it again rather than assuming it is still there; starting an already
+		// running foreground service is a no-op that refreshes its notification.
+		first?.let { SessionService.start(this, it.device.display) }
+	}
+
+	/** The page an adopted session can be loaded from: its origin, without the spent token. */
+	private fun pageUrlFor(session: RemoteSession): String {
+		val origin = originOf(session.url) ?: return session.url
+		return "$origin/"
 	}
 
 	/**
@@ -313,39 +408,52 @@ class MainActivity : AppCompatActivity() {
 
 	override fun onDestroy() {
 		super.onDestroy()
-		// **Any destroy ends the sessions, not only a finishing one.** The sessions live
-		// in this activity, so a destroy that is not `isFinishing` throws away the only
-		// list that can reach them: the foreground service and the far side's `dsh web`
-		// both go on running, `onCreate` rebuilds every tab as IDLE from the book, and
-		// the shade says "Connected to X" while the panel offers CONNECT — which starts
-		// a *second* `dsh web` on that machine.
+		// This window must not react to a handover any more: the next one is the one
+		// that will adopt, and a posted `render` here would draw a view tree that is
+		// already gone. It removes only its own observer — an OEM relaunch can overlap
+		// the two activities, and clearing the slot would drop the incoming window's.
+		Sessions.running.unobserve(sessionObserver)
+		// **A finishing destroy ends the sessions; a recreating one hands them over.**
+		// The activity owns when a connection starts and when the operator ends it, but
+		// it does not own the connection's lifetime any more: a destroy that is not
+		// `isFinishing` is followed by a new `onCreate` for the same task, and stopping
+		// there is the reported split-screen disconnect — the far side's `dsh web` is
+		// reaped, the next window rebuilds every tab as IDLE from the book, and the
+		// panel offers CONNECT for a machine that was connected a moment ago.
 		//
-		// The `configChanges` list above (`orientation|screenSize|screenLayout|
-		// keyboardHidden|uiMode`) is what makes this look impossible, and it is the
-		// reason this went unnoticed: those changes arrive at `onConfigurationChanged`
-		// and never destroy anything. Every configuration **not** in that list does —
-		// `fontScale` is the one that is simply a setting, and it is *not* covered here
-		// by any of the five above; `locale` and `layoutDirection` are changed by
-		// `LocaleManager`, which is an ordinary system setting on 13+; `density`,
-		// `navigation`, `smallestScreenSize` and `colorMode` arrive the same way from a
-		// display or dock change. All of the resources that select a palette are
-		// re-resolved on the way through, which is why a mode change and a destroy can
-		// be the same event.
-		//
-		// **The cost of this version, stated because it is a decision:** sessions now
-		// belong to the window rather than to the process, so a configuration change
-		// that destroys the activity drops every connection and the operator connects
-		// again. The larger fix is to own them outside the activity — a process-level
-		// registry that `SessionService` re-attaches in `onCreate` — and that is
-		// deliberately out of scope here. This is the small version: it makes the two
-		// screens agree, at the price of a reconnect on a rare config change.
+		// So the two cases are separated by `isFinishing`, not by `isChangingConfigurations`:
+		// an OEM can relaunch the activity into split screen without a configuration
+		// change at all, and that relaunch also reports false there. What both have in
+		// common is that the task survives, which is exactly what `isFinishing` says.
 		destroyed = true
-		stopEverything()
-	}
+		if (isFinishing) {
+			// The operator left: end everything with the task, as Back and × always have.
+			for (tab in tabs) {
+				Sessions.running.remove(tab.device.id)
+				tab.stop()
+			}
+			// A session with no tab here has no owner left; stop it rather than lose the
+			// only reference to it. This is also the path that clears the registry.
+			for (session in Sessions.running.clear()) session.stop()
+			SessionService.stop(this)
+			return
+		}
 
-	private fun stopEverything() {
-		tabs.forEach { it.stop() }
-		SessionService.stop(this)
+		// The window is being replaced. Hand every open session over, and cancel a
+		// connect that is still in flight: its coroutine belongs to this activity's
+		// `lifecycleScope`, so a session it opened after the handover would belong to
+		// nobody. Cancelling is enough — the attempt's own `finally` stops whatever it
+		// opened, because the tab never took it.
+		for (tab in tabs) {
+			tab.connectJob?.cancel()
+			tab.connectJob = null
+			val session = tab.session ?: continue
+			val displaced = Sessions.running.adopt(tab.device.id, session)
+			if (displaced != null && displaced !== session) displaced.stop()
+			// The registry owns it now; `tab.stop()` would stop it as well.
+			tab.session = null
+		}
+		if (Sessions.running.isEmpty()) SessionService.stop(this)
 	}
 
 	// ---------------------------------------------------------------- webview
@@ -452,9 +560,16 @@ class MainActivity : AppCompatActivity() {
 
 	/**
 	 * Where a light/dark switch arrives, because `uiMode` is in this activity's
-	 * `configChanges`. The other configurations that land here — rotation, screen
-	 * size, the keyboard — repaint the same way, which is harmless: both calls are
-	 * idempotent and neither touches a session.
+	 * `configChanges`. The other configurations that land here — rotation, the
+	 * keyboard, and a window resize such as split screen or freeform, which is why
+	 * `smallestScreenSize` and `density` are in that list — repaint the same way,
+	 * which is harmless: both calls are idempotent and neither touches a session.
+	 *
+	 * **Landing here rather than in a destroy is the point.** `renderContent`
+	 * reconciles the WebView against the running tab's URL and finds it unchanged, so
+	 * a resize changes the window and nothing about the page. A recreation would take
+	 * the WebView with it, and the remote Harness is a single-page application: a
+	 * reload is a lost conversation.
 	 */
 	override fun onConfigurationChanged(newConfig: Configuration) {
 		super.onConfigurationChanged(newConfig)
@@ -706,10 +821,13 @@ class MainActivity : AppCompatActivity() {
 	 * than the conversation that was there. Reported from use, not from a test.
 	 *
 	 * The reconciliation is the desktop client's, which has kept one guest per tab
-	 * since it was written: a view is created once per (tab, url) pair and then left
-	 * alone, and switching tabs changes visibility and nothing else. A view whose
-	 * URL no longer matches is the one case that rebuilds — which happens when a
-	 * session is torn down and started again, and *that* is a new page by definition.
+	 * since it was written: a view is created once per (tab, page) pair and then left
+	 * alone, and switching tabs changes visibility and nothing else. A view whose page
+	 * no longer matches is the one case that rebuilds — which happens when a session is
+	 * torn down and started again, and *that* is a new page by definition. A session
+	 * adopted after a recreate is the other case: the new activity has no views at all,
+	 * and it builds one from [Tab.pageUrl], which is the origin rather than the spent
+	 * token URL.
 	 */
 	private fun renderContent() {
 		val tab = tabs.getOrNull(activeIndex)
@@ -717,20 +835,21 @@ class MainActivity : AppCompatActivity() {
 		// `takeIf` in a local reads better but does not smart-cast at the use sites.
 		val showing = tab?.takeIf { it.state == State.RUNNING }
 		val session = showing?.session
+		val pageUrl = showing?.pageUrl ?: session?.url
 
-		// Retire the views of tabs that are no longer running, and of a tab whose
-		// session has been replaced. Destroying rather than hiding is deliberate: a
-		// hidden WebView keeps its renderer process, its sockets and its cookies
-		// alive, and a torn-down session must not leave that behind.
+		// Retire the views of tabs that are no longer running, and of a tab whose page
+		// has been replaced. Destroying rather than hiding is deliberate: a hidden
+		// WebView keeps its renderer process, its sockets and its cookies alive, and a
+		// torn-down session must not leave that behind.
 		for ((id, entry) in views.toList()) {
 			val current = tabs.firstOrNull { it.device.id == id }
-			if (current != null && current.state == State.RUNNING && current.session?.url == entry.url) continue
+			if (current != null && current.state == State.RUNNING && current.pageUrl == entry.url) continue
 			webHost.removeView(entry.view)
 			entry.view.destroy()
 			views.remove(id)
 		}
 
-		if (showing == null || session == null) {
+		if (showing == null || session == null || pageUrl == null) {
 			webHost.visibility = View.GONE
 			panel.visibility = View.VISIBLE
 			renderPanel(tab)
@@ -738,7 +857,7 @@ class MainActivity : AppCompatActivity() {
 		}
 
 		val existing = views[showing.device.id]
-		val view = existing?.takeIf { it.url == session.url }?.view ?: run {
+		val view = existing?.takeIf { it.url == pageUrl }?.view ?: run {
 			val created = WebView(this)
 			// The shell's own colour, which shows for the moment before the remote page
 			// paints. It used to be a guess about a mismatch that mostly is not one: the
@@ -751,7 +870,7 @@ class MainActivity : AppCompatActivity() {
 			// ever needs fixing, the place is a spinner held until `onPageCommitVisible`, not
 			// a different colour here.
 			created.setBackgroundColor(getColor(R.color.bg))
-			configureWebView(created, originOf(session.url))
+			configureWebView(created, originOf(pageUrl))
 			webHost.addView(
 				created,
 				android.widget.FrameLayout.LayoutParams(
@@ -759,14 +878,16 @@ class MainActivity : AppCompatActivity() {
 					android.widget.FrameLayout.LayoutParams.MATCH_PARENT
 				)
 			)
-			views[showing.device.id] = WebEntry(created, session.url)
+			views[showing.device.id] = WebEntry(created, pageUrl)
 			// The cookie jar is keyed by host while the Harness names its cookie per
 			// forwarded authority, so a tab that has reconnected many times drags a
 			// growing pile of dead 127.0.0.1 cookies into every request. Past the
 			// server's header limit the answer is 431 and no page can ever load, so an
 			// oversized jar is dropped first — the token mints a fresh cookie at once.
-			val jar = CookieManager.getInstance().getCookie(session.url)
-			fun load() = created.loadUrl(session.url)
+			// An adopted page has no token left to mint anything with, which is why the
+			// handover happens only after a successful load: the cookie is already there.
+			val jar = CookieManager.getInstance().getCookie(pageUrl)
+			fun load() = created.loadUrl(pageUrl)
 			if (jar != null && jar.length > 8000) {
 				CookieManager.getInstance().removeAllCookies {
 					CookieManager.getInstance().flush()
@@ -1014,7 +1135,16 @@ class MainActivity : AppCompatActivity() {
 						is SessionStart.Ok -> {
 							tab.session = result.session
 							tab.state = State.RUNNING
+							// A freshly opened session is loaded from its token URL. Once it is
+							// adopted after a recreate, `pageUrl` is the origin instead; see the
+							// `Tab.pageUrl` documentation.
+							tab.pageUrl = result.session.url
 							tab.lines = result.session.transcript
+							// Hand it to the registry the moment the tab takes it, so a destroy
+							// between this line and the next render cannot lose it.
+							Sessions.running.adopt(tab.device.id, result.session)?.let { displaced ->
+								if (displaced !== result.session) displaced.stop()
+							}
 							// **A working connection is what resets the retry budget**, so a
 							// machine that restarts once an hour is never treated as one that
 							// keeps dying, while consecutive failures keep counting towards the
@@ -1114,16 +1244,23 @@ class MainActivity : AppCompatActivity() {
 	 *
 	 * Called after every path that can end a session, because the service is what keeps
 	 * the process — and therefore the tunnel inside it — out of the cached state. It
-	 * stays up while **either** a session is running or starting, **or** a tab still has
-	 * reconnect budget: a reconnect that has not started yet is exactly the window the
-	 * service exists to protect, and using the budget rather than a "pending" flag means
-	 * there is no flag to forget to clear.
+	 * stays up while **either** the registry holds a session, a tab is running or
+	 * starting, **or** a tab still has reconnect budget: a reconnect that has not
+	 * started yet is exactly the window the service exists to protect, and using the
+	 * budget rather than a "pending" flag means there is no flag to forget to clear.
+	 *
+	 * **The registry comes first, and [destroyed] gates the rest.** After a destroy has
+	 * handed a session over, the tabs no longer point at it and the coroutines that
+	 * would have called this are being cancelled; reading only the tabs there would
+	 * stop the service under a live connection. The registry is the fact that survives
+	 * that handover, so it is the fact this reads.
 	 */
 	private fun stopServiceIfIdle() {
-		val busy = tabs.any {
-			it.state == State.RUNNING || it.state == State.STARTING ||
-				(reconnectAttempts[it.device.id] ?: 0) > 0
-		}
+		val busy = !Sessions.running.isEmpty() ||
+			(!destroyed && tabs.any {
+				it.state == State.RUNNING || it.state == State.STARTING ||
+					(reconnectAttempts[it.device.id] ?: 0) > 0
+			})
 		if (!busy) SessionService.stop(this)
 	}
 

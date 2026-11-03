@@ -46,6 +46,7 @@ redirect, so every later reload uses the cookie rather than the URL.
 | **Host keys are pinned** | Trust on first use, then verified on every later connect. A changed host key is refused, and you are told, rather than silently accepted. |
 | **Teardown that reaps** | Closing a tab stops the remote `dsh web` on the far side instead of leaving it holding the machine's resources. |
 | **Survives leaving the app** | A foreground service keeps the connection alive while you are in another app. |
+| **Survives a window resize** | Split screen, freeform and a folding device resize the window in place; if an OEM recreates the window instead, the new window adopts the live session — the page reloads, the connection does not drop. |
 | **Automatic reconnect** | If the remote server goes away — a plugin edit restarts it, for instance — the tab says so and reconnects on its own, within a bounded number of attempts. |
 | **A readable failure** | A connect that fails shows the far side's own words, not just "connection failed". |
 | **Follows the system theme** | The shell is light or dark with the system setting, from `values/` and `values-night/` palettes. The two files are held to the same colour names and to contrast floors on the build machine (`ThemePaletteTest`), because a colour that is unreadable in one mode builds, renders and ships. The Harness UI behind the shell has its own theme and is unaffected — a light shell can hold a dark page. |
@@ -131,6 +132,7 @@ each section is a decision that cost something to learn.
 | [Diagnosing a connection](#diagnosing-a-connection) | What to look at when it will not connect |
 | [What was verified, and how](#what-was-verified-and-how) | The verification table |
 | [The connect attempt that nobody owned](#the-connect-attempt-that-nobody-owned) | The session a cancelled connect used to leak, and why the activity owns its sessions |
+| [Split screen](#split-screen-and-the-session-that-outlived-the-window) | What did not cause the disconnect, and what now survives a recreate |
 | [Known gaps](#known-gaps) | What it does not do yet |
 
 ---
@@ -180,6 +182,7 @@ URL。
 | **主机密钥固定** | 首次信任，之后每次连接都校验。主机密钥变了会被拒绝并告知，而不是默默接受。 |
 | **关得干净** | 关标签页会停掉远端的 `dsh web`，不会留下进程占着那台机器的资源。 |
 | **切出去也不断** | 前台服务让连接在你用别的应用时保持存活。 |
+| **分屏不重连** | 分屏、小窗、折叠设备只是改变窗口大小；即使 OEM 重建窗口，新窗口也会接管活着的连接 —— 页面会重新加载，但连接不断。 |
 | **自动重连** | 远端服务消失时（比如改插件导致它重启），标签页会说原因并自行重连，重试次数有上限。 |
 | **失败能读懂** | 连接失败会显示对端自己的原话，而不是只给一句"连接失败"。 |
 
@@ -252,6 +255,7 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 | [Diagnosing a connection](#diagnosing-a-connection) | 连不上时该看什么 |
 | [What was verified, and how](#what-was-verified-and-how) | 验证记录表 |
 | [The connect attempt that nobody owned](#the-connect-attempt-that-nobody-owned) | 被取消的连接曾经泄漏的那条会话，以及会话为什么归窗口所有 |
+| [Split screen](#split-screen-and-the-session-that-outlived-the-window) | 真正断线的原因，以及现在什么能扛过活动重建 |
 | [Known gaps](#known-gaps) | 目前还做不到什么 |
 
 > 技术细节一律以英文原文为准，中文部分不重复翻译，避免两份说明逐渐说不到一起去。
@@ -486,7 +490,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 28 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 39 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
@@ -1004,6 +1008,28 @@ writes there:
 - **The Windows launcher picks a `dsh` it can start** — the far-side transcript shows
   `launch node=… script=…\@deepseek-ai\dsh\lib\bin.js exists=True`.
 
+### On the emulator, 2026-11-03 (Pixel Tablet AVD `dsh_tablet`, Android 15)
+
+The pad was not attached for this round, so the window-lifecycle fix was settled on the
+AVD instead. It answers the Android question, not the MIUI one:
+
+- **Split screen does not recreate the activity on stock Android.** Entering it from
+  Recents put the task in `mode=multi-window` and halved its bounds, and the build with
+  the old five-flag `configChanges` kept the same `ActivityRecord`, the same
+  `SessionService` and the same far-side `dsh web` process. That is what made the
+  "missing `smallestScreenSize`" explanation wrong.
+- **A destroying configuration change did end the session.** Changing the system font
+  scale (not in `configChanges`) relaunched `MainActivity`; on the old build the service
+  disappeared and the app rebuilt its tabs as IDLE from the book — the reported
+  disconnect, reproduced without a pad.
+- **The registry survives it.** With `Sessions` in place, the same font-scale change was
+  applied twice: the activity was relaunched each time (`finishDrawing of relaunch` in
+  `logcat`), and the tab stayed RUNNING, `SessionService` stayed foreground, the far
+  side's `dsh web` kept its pid, and the page reloaded from its cookie. Split screen also
+  kept the connection, and × stopped the session and the service. The emulator ran the
+  debug build, because the probe is what puts the app's key on this machine; the
+  lifecycle code under test does not differ between build types.
+
 Not settled on a device, and why:
 
 - **The forward's origin** — a tab must not render another tab's port. Triggering it
@@ -1074,7 +1100,7 @@ minute and none of them is visible from the build machine:
 | --- | --- |
 | A cancelled connect stops its session | Connect to a slow host (the host-key exchange and the readiness line are the two long waits), tap CONNECT on another tab while the first is still starting, then `pgrep -af 'dsh web'` on the far side. One process, not two. |
 | …and again when the tab is removed | Long-press the tab mid-connect, Remove, then the same `pgrep`. |
-| A non-finishing destroy stops its sessions | The configurations that get there cannot be triggered by hand — rotating is in `configChanges`, and font scale is in Settings — so temporarily drop `fontScale` from `configChanges`, change it while connected, and confirm the tab comes back IDLE with the far side's `dsh web` gone. |
+| A recreated window adopts its sessions | Change the system **font scale** while connected: it is not in `configChanges`, so the activity is relaunched. The tab must stay RUNNING, the far side's `dsh web` must keep its pid, and the page must reload from its cookie. Then press Back out of the app: the finishing destroy must stop everything — no `SessionService` in `dumpsys`, and `pgrep -af 'dsh web'` on the far side finds nothing. |
 | The service survives a reconnect | Kill the remote server (or write the plugin that restarts it) and watch `adb shell dumpsys activity services dev.dshtabs` across the retry: the service and its notification must stay up for the whole backoff, not disappear and come back. |
 | The keystore is off the main thread | Start a method trace around a connect with a key present and check that `EncryptedSharedPreferences` / `MasterKey` / `Keys.credentialFor` are not on the main thread. On a device with a hardware-backed keystore the decrypt is also slow enough to see as a stalled frame on the CONNECT tap. |
 | The app survives a dead renderer | Load the remote page, kill its renderer (`adb shell ps -A` for the `sandboxed_process` of this app, then kill that pid), and confirm the app does not restart and the other tabs keep their sessions. |
@@ -1225,26 +1251,22 @@ reasoning over the code plus the fact that the suite compiles and passes, and th
 that would settle it is on the far side rather than the phone — see
 [What the last round of fixes could not be settled without](#what-the-last-round-of-fixes-could-not-be-settled-without-and-how).
 
-**The activity owns its sessions, and that is a decision with a price.** A destroy that
-is *not* `isFinishing` used to leave the sessions running inside a `tabs` list that was
-thrown away, while the foreground service kept the process alive and `onCreate` rebuilt
-every tab as IDLE from the book: the shade said "Connected to X", the panel offered
-CONNECT, and pressing it would start a **second** `dsh web` on that machine. The
-`configChanges` list (`orientation|screenSize|screenLayout|keyboardHidden|uiMode`)
-covers the changes that used to make this look impossible — those never destroy
-anything — but every configuration *not* in it does, and one of them is just a setting:
-**font scale** is in Settings, is not covered by any of those five, and destroys the
-activity when it changes. `locale` and `layoutDirection` are changed in the same way by
-`LocaleManager` on Android 13+, and `density`, `navigation`, `smallestScreenSize` and
-`colorMode` arrive from a display or dock change. The resources that select the palette
-are re-resolved through all of them, so a mode change and a destroy can be one event.
+**The activity used to own its sessions, and that is what split screen found.** A destroy
+that is *not* `isFinishing` used to leave the sessions running inside a `tabs` list that
+was thrown away, so both possible readings were wrong: stopping them — the change that
+made the panel and the shade agree — turned every recreate into a disconnect, and keeping
+them there left a connection no UI could reach. The cost was written down as a known gap:
+**sessions belonged to the window rather than to the process.**
 
-`onDestroy` now stops the sessions whichever kind of destroy it is. The cost is stated
-where the decision is: **sessions belong to the window rather than to the process**, so
-a destroying configuration change drops every connection and the operator connects
-again. The larger fix — a process-level registry that `SessionService` re-attaches in
-`onCreate` — is deliberately out of scope, and that is the known gap rather than an
-oversight. See [Known gaps](#known-gaps).
+They belong to the process now: `Sessions` is the registry, `onDestroy` hands over when
+the window is being replaced instead of finishing, and `onCreate` adopts before the first
+render. [Split screen](#split-screen-and-the-session-that-outlived-the-window) records
+what changed the direction of that fix — the missing `smallestScreenSize` was not the
+cause — and the window configuration list is now complete anyway, which keeps a resize
+from costing even the page reload. What is still outside it is the system-wide set —
+**font scale**, `locale`, `layoutDirection`, `mcc`/`mnc` — and those still recreate the
+activity; they no longer end a session, they reload its page. See [Known
+gaps](#known-gaps).
 
 Two consequences of destroying with a connect in flight, both closed in the same change:
 a cancelled attempt's `finally` still runs, and cancelling a coroutine cannot stop a
@@ -1260,6 +1282,75 @@ the whole backoff, which is precisely the window this service is for. The servic
 kept while any tab still has reconnect budget, and stopped when the budget is spent or
 the tab really is idle. Pressing **×** clears the budget, so a cancelled retry does not
 hold a foreground service and a notification up for ever.
+
+## Split screen, and the session that outlived the window
+
+Reported from use: on the pad, putting the app into **split screen** disconnected it and
+the panel was back to CONNECT. Nothing had failed — no step had errored — because the
+client had ended the session on purpose.
+
+The first guess was a missing configuration. Entering split screen shrinks the window,
+and this activity declared `orientation|screenSize|screenLayout|keyboardHidden|uiMode`.
+`smallestScreenSize` and `density` were not in that list, and Android's rule is exact: a
+configuration an activity does not list destroys and recreates it. That would run
+`onDestroy`, which stopped every session because the activity owned them, and the next
+`onCreate` rebuilt every tab as IDLE from the book. It was a tidy explanation and it was
+**wrong**, which the emulator settled in a few minutes:
+
+- On a stock Android 15 tablet image (the `dsh_tablet` AVD), entering split screen from
+  Recents put the activity in `mode=multi-window` and resized it — and the build with
+  the *old* five-flag list survived it: the same `ActivityRecord`, `SessionService`
+  still foreground, and the far side's `dsh web` still the same process. A resize is
+  not a recreate on this platform; the missing flag was not the cause.
+- The destroy path itself is real, and was reproduced by changing the system **font
+  scale** while connected. That is a configuration the activity does not handle, and
+  the old build lost the connection exactly as reported: the foreground service
+  disappeared and the next window rebuilt every tab as IDLE from the book.
+
+So the failure is not "split screen changes a configuration". It is the older one this
+file had already written down as a known gap: **the session belonged to the window**, so
+any recreate ended it. An OEM's split-screen implementation is one of the things that
+can recreate a window, with or without a configuration change, and no `configChanges`
+entry can stop a relaunch the OEM performs for its own reasons.
+
+The fix is the one the gap named: **sessions belong to the process now.** `Sessions` is a
+small registry of live `RemoteSession`s keyed by device id. A destroy that is not
+`isFinishing` — a configuration change, an OEM relaunch, a split-screen reparenting —
+hands every open session to it instead of stopping it, and cancels any connect still in
+flight rather than trying to carry a coroutine across. The next `onCreate` adopts what it
+finds before the first render, so the tab is RUNNING with no CONNECT and no second
+`dsh web`. A finishing destroy (Back out of the app) still stops everything, and so does
+×, because `Tab.stop` takes the registry entry with it.
+
+The page is the one thing that cannot be carried over: a WebView belongs to its activity,
+so an adopted tab builds a new one. Its URL is the **origin root**, not `session.url`,
+because the token in that URL is a one-time entry ticket and the first load spent it.
+What still authenticates is the cookie that load left in the process-wide jar, on the
+same origin. So the connection, the forward and the far-end program survive; the page
+reloads, and whatever was on it does not. That is a page reload rather than a
+disconnect, and it is what "no reconnect" can mean without moving a WebView between
+activities, which Android does not support.
+
+Two smaller pieces went in with it and are worth naming:
+
+- The **window configuration list** grew to every configuration a window can have —
+  `smallestScreenSize`, `density`, `navigation` and `colorMode` joined the five. It is
+  not the fix. It is what keeps a split-screen or display change from rebuilding the
+  page at all on a platform that does recreate for one; `WindowConfigTest` pins it.
+- `stopServiceIfIdle` reads the registry as well as the tabs. After a handover the tabs
+  no longer point at the session and the coroutines that would have called it are being
+  cancelled, so the old reading would drop the foreground service under a live
+  connection.
+
+**Verified on the emulator, not on the pad:** the pad was not attached for this round.
+With the registry build, a font scale change relaunched `MainActivity` twice; both times
+`SessionService` stayed foreground, the far side's `dsh web` kept its process id, the
+tab stayed RUNNING, and the page reloaded from the cookie. Split screen also kept the
+connection, and × stopped it. What a stock image cannot answer is whether MIUI's own
+split-screen implementation takes the recreate path this registry survives or kills the
+process, which no in-process fix survives. The check that settles it is one drag and two
+looks: connect, note the far side's `pgrep -af 'dsh web'`, enter split screen, and
+confirm the tab still says RUNNING and the pid is unchanged.
 
 ## Known gaps
 
@@ -1299,15 +1390,21 @@ hold a foreground service and a notification up for ever.
   Both clients have now been run against a real Windows host — the build machine, which
   is the same machine `box-b` stood in for. What that round cost is written down above:
   the profile-link failure, the 431 behind a valid token, and the abandoned channel.
-- **Sessions belong to the activity, not to the process.** So a configuration change
-  that destroys the activity drops every connection and the operator connects again.
-  Rotating does not — that is in `configChanges` on purpose — but changing the system
-  **font scale** does, and so do a locale change, a display/density change and the rest
-  of the list in [The connect attempt that nobody
-  owned](#the-connect-attempt-that-nobody-owned). `onDestroy` stops the sessions because
-  the alternative was worse: sessions no UI could reach, with the shade still claiming a
-  connection and a CONNECT button that would start a second `dsh web` on that machine.
-  Owning them outside the activity is the real fix and is not done.
+- **A Windows remote can keep its `dsh web` after the client disconnects.** Measured on
+  the build machine through the emulator: after × the tab went IDLE and `SessionService`
+  stopped, but the far side's `node … dsh web --no-open --port 0` was still running
+  minutes later. The POSIX path reaps (the verification table above), so the difference
+  is the Windows launcher: its remote script waits on stdin and is meant to `taskkill`
+  the child in a `finally`, and that finaliser did not run here. Not diagnosed further —
+  it is a leaked remote process, not a client-visible failure.
+- **Sessions live in the process, so a process death still drops them.** A window that is
+  recreated — a configuration change, an OEM relaunch for split screen — hands its
+  connections to `Sessions` and the next window adopts them: the SSH session, the forward
+  and the far side's `dsh web` survive, and only the page reloads. What no in-process
+  registry survives is the process being killed. Then the connections end with it,
+  `onCreate` starts from the book as IDLE, and the operator connects again. Nothing in
+  this client can change that without a reconnect, which would start a *new* `dsh web`
+  and lose the conversation that was on the far side.
 - **A dead renderer leaves its tab asking.** One renderer serves every tab, so an
   out-of-memory in one remote page ends that page for all of them — the app now
   survives it (`onRenderProcessGone` returning `true` is what used to kill the
