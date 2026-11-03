@@ -36,9 +36,28 @@
 				android:resource="@xml/update_paths" />
 		</provider>
 
+		<!--
+			`configChanges` is a page-preservation decision here, not a layout
+			convenience. A configuration that is not listed recreates the activity,
+			which rebuilds every WebView: the connection itself survives in `Sessions`,
+			but the remote Harness is a single-page application, so a reload loses what
+			was on the page. Every configuration a *window* can have is therefore
+			listed — a split screen shrinks the window, which changes
+			`smallestScreenSize` (and on an OEM's compatibility scaling, `density`).
+
+			The list was once read as the cause of the pad's split-screen disconnect
+			and was not; the README's "Split screen, and the session that outlived the
+			window" has the measurements. It is what keeps a window change from
+			costing even the page.
+
+			The configurations deliberately **not** listed are the system-wide ones —
+			`fontScale`, `locale`, `layoutDirection` — which need the views rebuilt to
+			be drawn correctly. Those now recreate the activity without ending a
+			session; the page reloads and the conversation on it is lost.
+		-->
 		<activity
 			android:name=".MainActivity"
-			android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+			android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|navigation|uiMode|colorMode"
 			android:exported="true"
 			android:launchMode="singleTask"
 			android:windowSoftInputMode="adjustResize">
