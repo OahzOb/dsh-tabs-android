@@ -490,7 +490,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 39 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 51 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
@@ -1173,10 +1173,47 @@ $ curl -H "Cookie: dsh-auth-test=<20 KB of x>" 'http://127.0.0.1:<port>/?token=�
 $ curl -H "Cookie: a=b"                        'http://127.0.0.1:<port>/?token=…'  → 303
 ```
 
-Clearing the jar is safe because the token in the current URL mints a fresh cookie for
-this port on the next request. The client now does it in two places: before a load when
-`CookieManager.getCookie()` already exceeds 8000 characters, and once more on a
-main-frame 431 before reloading.
+**The first fix emptied the whole jar, and that was too blunt.** `CookieManager` is one
+jar per process, shared by every WebView, so a cleanup made for one tab signs the others
+out: their pages keep drawing, but their next request carries no credential — and an
+adopted tab, whose page is the origin rather than the token URL, has no entry ticket
+left to mint a new one. The desktop client rejected the same trade-off for the same
+reason ("The cookie jar outgrew the header limit" there); WebView below the
+multi-profile API offers no per-tab partition to copy.
+
+What can be local is the **deletion**, because the cookie's name carries its authority.
+The Harness derives `dsh-auth-` + base64url(SHA-256(`host:port`)), so this client
+derives it too (`AuthCookies`), and a reconnect's new port makes every cookie but the
+ones belonging to a running session dead by definition. Those are deleted:
+
+- **before a connect**, right after the tab's previous session stops — the next page is
+  an SSH handshake and a `dsh web` start away, so the deletion lands before the first
+  request reads the jar;
+- **before a page is created**, for a jar inherited from a previous launch;
+- **on a main-frame 431** — and only when the header is still over 8000 characters with
+  nothing dead left to remove is the shared jar emptied, which is the old behaviour kept
+  as a last resort rather than the first move. The reload happens once per URL, so a
+  431 that was never the jar ends on the WebView's error page instead of reloading for
+  ever.
+
+`AuthCookiesTest` compares the derived name with a vector produced by
+`dsh-client-connection`'s own `cookieName` — the derivation, not this implementation —
+so an encoding change on either side fails the build rather than deleting nothing.
+`CookieJarTest` reads `MainActivity.kt` to hold the order (stop, prune, load; prune
+before the whole-jar clear). The platform half is `CookieJarDeviceTest`, an instrumented
+test: measured on the API 35 `dsh_tablet` AVD on 2026-11-23, a `Max-Age=0` replacement
+removed the dead `HttpOnly` cookie and left the live one — the one behaviour a JVM test
+cannot answer. It runs on an emulator because `connectedDebugAndroidTest` installs a
+debuggable build, and the pad never gets one.
+
+**Measured end to end on the pad, 2026-11-23** — OPPO OPD2515, Android 17, WebView
+144, the release build with one `Log.i` added for the measurement and nothing else
+changed. With two tabs connected the jar held two cookies (454 characters); a
+reconnect of the first logged `before=454 dead=1 live=1 after=226`, so the other tab's
+cookie survived by name while the stopped tab's went. Both tabs then reloaded the
+whole Web Harness from an adopted page — the origin root, no token — which is the
+cookie doing the authenticating. Three single-tab reconnects logged `before=226 dead=1
+after=0` each instead of 226, 452, 678: the pile never forms.
 
 It became reachable after the `0.2.1-rc.3` update: the cookie naming that carries the
 forwarded port is what makes the jar grow by one cookie per reconnect instead of staying

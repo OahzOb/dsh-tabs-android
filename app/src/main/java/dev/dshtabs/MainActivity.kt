@@ -45,6 +45,16 @@ import java.util.concurrent.CompletableFuture
 import kotlin.coroutines.resume
 
 /**
+ * The largest `Cookie` header this client lets itself send before it empties the jar.
+ *
+ * Node's `maxHeaderSize` is 16 KiB for the **whole** header block, and Chromium adds
+ * its own on top of the cookies, so half of it is the point at which the risk stops
+ * being theoretical. One constant, read by both the pre-load check and the 431
+ * handler, so the two cannot disagree about what "oversized" means.
+ */
+private const val COOKIE_HEADER_BUDGET = 8000
+
+/**
  * The window: a tab bar that is always visible, and one Harness UI under it.
  *
  * This is the same shape as the desktop application's window, deliberately. What
@@ -59,10 +69,13 @@ import kotlin.coroutines.resume
  *   A window that is recreated — a configuration change this activity does not handle,
  *   or an OEM relaunch for split screen — hands its sessions to [Sessions] and the next
  *   window adopts them, which is what keeps a resize from being a disconnect.
- * - **One WebView is reused for every tab.** Each session gets its own loopback
- *   origin (`127.0.0.1:<a fresh port>`), so the cookies the Harness issues are
- *   already partitioned per machine by the port number; a second WebView would buy
- *   nothing and cost a second renderer process.
+ * - **One WebView per running tab, and one cookie jar for the process.** A tab's page
+ *   is built once for the session it shows and then left alone, so switching tabs
+ *   changes visibility and nothing else. The jar does not follow: `CookieManager` is
+ *   one per process, and the Harness's `dsh-auth-*` cookies are keyed by host, not by
+ *   the forwarded port, so every tab's cookies — and every past connection's — ride
+ *   on every request to `127.0.0.1`. [dropDeadAuthCookies] is how that pile is kept
+ *   bounded without signing the other tabs out.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -594,6 +607,68 @@ class MainActivity : AppCompatActivity() {
 		return "$scheme://$host:$port"
 	}
 
+	/**
+	 * A URL on the cookie host, for jar operations that are about the host and not
+	 * about a page.
+	 *
+	 * Cookies ignore the port — which is the whole reason this client has to clean up
+	 * by name — so any loopback URL names the same jar as a forwarded one.
+	 */
+	private val cookieJarUrl = "http://${AuthCookies.HOST}/"
+
+	/**
+	 * The authorities of the sessions this process still owns, in the spelling the
+	 * Harness names a cookie by.
+	 *
+	 * The registry, not the tab book: a session handed over by a recreated window is
+	 * live even before the next window has adopted it, and its page is exactly the one
+	 * whose cookie must not be deleted.
+	 */
+	private fun liveCookieAuthorities(): Set<String> =
+		Sessions.running.snapshot().values.mapTo(mutableSetOf()) {
+			"${AuthCookies.HOST}:${it.localPort}"
+		}
+
+	/**
+	 * Delete the `dsh-auth-*` cookies no live session can authenticate with, and report
+	 * how many went.
+	 *
+	 * **This is the part of the 431 fix that can be local to one connection.**
+	 * `CookieManager` is one jar per process and has no per-WebView partition, so the
+	 * desktop client's answer — a session per tab, emptied before each connect — cannot
+	 * be copied literally. What can: a cookie names the authority that minted it, and
+	 * a reconnect forwards a *new* port, so every cookie from an earlier connection is
+	 * dead by the time the next one starts. Deleting those by name keeps the tabs that
+	 * are still running signed in, which `removeAllCookies` would not.
+	 *
+	 * The whole jar stays as the last resort, in `onReceivedHttpError` and in the
+	 * pre-load check in `renderContent`: if the Harness ever renames its cookie this
+	 * matches nothing and that fallback is what still loads a page. [AuthCookiesTest]
+	 * pins the derivation against the server's own vector, so a rename is a test
+	 * failure on the build machine before it is an operator's blank tab.
+	 */
+	private fun dropDeadAuthCookies(url: String = cookieJarUrl): Int {
+		return try {
+			val manager = CookieManager.getInstance() ?: return 0
+			val header = manager.getCookie(url) ?: return 0
+			val dead = AuthCookies.deadNames(header, liveCookieAuthorities())
+			for (name in dead) {
+				// A cookie is removed by replacing it with an empty one that has expired.
+				// The attributes repeat the Harness's own: `Path=/` is what it sets, and
+				// `HttpOnly` does not stop this API — it only hides the cookie from
+				// JavaScript. `Max-Age=0` is the RFC 6265 spelling and `Expires` is there
+				// for the WebView versions that only honour the older one.
+				manager.setCookie(url, "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")
+			}
+			dead.size
+		} catch (_: Exception) {
+			// Housekeeping must never fail a connect, and this runs on the connect path:
+			// a provider that is not up yet, or a jar that refuses the write, only means
+			// the 431 fallback is where this connection ends up instead.
+			0
+		}
+	}
+
 	@SuppressLint("SetJavaScriptEnabled")
 	private fun configureWebView(view: WebView, origin: String?) {
 		with(view.settings) {
@@ -624,6 +699,16 @@ class MainActivity : AppCompatActivity() {
 			loadWithOverviewMode = true
 		}
 		view.webViewClient = object : WebViewClient() {
+
+			/**
+			 * The one URL this view has already reloaded for a jar cleanup.
+			 *
+			 * Per view rather than per process: a new view is a new session and a fresh
+			 * ticket, while a second 431 for the *same* page is the signal that cookies
+			 * were not the cause.
+			 */
+			private var jarRetryUrl: String? = null
+
 			/**
 			 * Keep the WebView on **this tab's** forward and nowhere else.
 			 *
@@ -659,9 +744,19 @@ class MainActivity : AppCompatActivity() {
 			 * host:port>`), and every reconnect forwards a **new** loopback port, so each
 			 * session leaves a 30-day cookie behind. Browsers send cookies by host and
 			 * ignore the port, so all of them ride on every request; past Node's 16 KB
-			 * header limit the answer is 431 before the token is even read, and no page
-			 * can load again until the jar is emptied. Dropping it is safe: the token in
-			 * the current URL mints a fresh cookie for this port on the next request.
+			 * header limit the answer is 431 before the token is even read.
+			 *
+			 * **The cleanup is by name first, and by emptying second.** A cookie whose
+			 * authority no longer exists is the dead weight, and deleting just those
+			 * keeps the tabs that are still running signed in — the whole-jar clear
+			 * cannot, because `CookieManager` is shared by every WebView in the process.
+			 * The jar is emptied only when the header is over the budget with nothing
+			 * dead left in it, which means the 431 was not this client's pile at all.
+			 *
+			 * The retry is once per URL: a 431 that survives a cleanup would otherwise
+			 * reload for ever, and the WebView's error page is at least something an
+			 * operator can act on. Reloading is safe after a 431 because the server
+			 * refused before it read the token, so the entry ticket is still unspent.
 			 */
 			override fun onReceivedHttpError(
 				view: WebView,
@@ -669,10 +764,20 @@ class MainActivity : AppCompatActivity() {
 				response: WebResourceResponse
 			) {
 				if (!request.isForMainFrame || response.statusCode != 431) return
-				CookieManager.getInstance().removeAllCookies {
-					CookieManager.getInstance().flush()
-					view.loadUrl(request.url.toString())
+				val url = request.url.toString()
+				if (jarRetryUrl == url) return
+				jarRetryUrl = url
+				dropDeadAuthCookies(url)
+				val header = CookieManager.getInstance()?.getCookie(url)
+				if (header != null && header.length > COOKIE_HEADER_BUDGET) {
+					CookieManager.getInstance().removeAllCookies {
+						CookieManager.getInstance().flush()
+						view.loadUrl(url)
+					}
+					return
 				}
+				CookieManager.getInstance().flush()
+				view.loadUrl(url)
 			}
 
 			/**
@@ -881,14 +986,17 @@ class MainActivity : AppCompatActivity() {
 			views[showing.device.id] = WebEntry(created, pageUrl)
 			// The cookie jar is keyed by host while the Harness names its cookie per
 			// forwarded authority, so a tab that has reconnected many times drags a
-			// growing pile of dead 127.0.0.1 cookies into every request. Past the
-			// server's header limit the answer is 431 and no page can ever load, so an
-			// oversized jar is dropped first — the token mints a fresh cookie at once.
-			// An adopted page has no token left to mint anything with, which is why the
+			// growing pile of dead 127.0.0.1 cookies into every request. **The dead ones
+			// go by name first** — `dropDeadAuthCookies` keeps every running tab's
+			// cookie, which a whole-jar clear could not — and only a jar that is still
+			// over the budget is emptied, because at that point there is nothing dead
+			// left to remove. The token mints a fresh cookie at once either way. An
+			// adopted page has no token left to mint anything with, which is why the
 			// handover happens only after a successful load: the cookie is already there.
+			if (dropDeadAuthCookies(pageUrl) > 0) CookieManager.getInstance().flush()
 			val jar = CookieManager.getInstance().getCookie(pageUrl)
 			fun load() = created.loadUrl(pageUrl)
-			if (jar != null && jar.length > 8000) {
+			if (jar != null && jar.length > COOKIE_HEADER_BUDGET) {
 				CookieManager.getInstance().removeAllCookies {
 					CookieManager.getInstance().flush()
 					load()
@@ -1060,6 +1168,12 @@ class MainActivity : AppCompatActivity() {
 	private fun startSession(index: Int, secret: String?, isReconnect: Boolean = false) {
 		val tab = tabs.getOrNull(index) ?: return
 		tab.stop()
+		// The session that just stopped has minted its last cookie, and the next page's
+		// first request is an SSH handshake and a `dsh web` start away — so this is the
+		// one moment where the cleanup can be done *before* the jar is read, rather
+		// than in the 431 path after it already was. `dropDeadAuthCookies` keeps every
+		// tab still running signed in; the one that just stopped is not one of them.
+		dropDeadAuthCookies()
 		// A fresh identity, so a result from an attempt that has just been superseded —
 		// or from one whose tab was removed — cannot be mistaken for this one's.
 		val attempt = Token()
