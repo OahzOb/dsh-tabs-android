@@ -889,7 +889,18 @@ class MainActivity : AppCompatActivity() {
 			// × stops the connection; the tab stays, because a tab is a configured
 			// machine rather than a transient view. Removing the machine is the
 			// long-press's job.
-			close.visibility = if (tab.state == State.IDLE) View.INVISIBLE else View.VISIBLE
+			//
+			// **Only the selected tab shows one.** The × sat on every tab, 22dp square
+			// and 4dp from the label, so a tap aimed at a tab's right edge disconnected
+			// that machine instead of selecting it — and the way back was a CONNECT.
+			// That is the report this answers. A switch is now only a switch, and
+			// stopping a session is something done to the tab already on screen.
+			//
+			// `INVISIBLE` rather than `GONE`: the tab keeps its width, so selecting a
+			// tab does not shift its neighbours under the next tap. The invisible area
+			// still belongs to the row, so a tap there selects — which is the point.
+			close.visibility =
+				if (index == activeIndex && tab.state != State.IDLE) View.VISIBLE else View.INVISIBLE
 			close.setOnClickListener {
 				stopTab(index)
 				render()

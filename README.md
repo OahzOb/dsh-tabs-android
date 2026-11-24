@@ -112,8 +112,9 @@ predates `0.2.0`: that build is the one without the updater.
   never asks for anything.
 - **Tap a tab** to select it; the panel's **Connect** starts the connection. A stray
   tap on a sleeping tab does not dial out.
-- **`×`** disconnects. The tab stays, because a tab is a configured machine, not a
-  transient view.
+- **`×`** disconnects, and it appears only on the **selected** tab — switching tabs
+  cannot disconnect one by accident. The tab stays, because a tab is a configured
+  machine, not a transient view.
 - **Long-press a tab** to edit or remove the machine.
 
 ## Documentation
@@ -237,7 +238,8 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 - 同一个对话框里的 **SSH key…** 生成应用自己的密钥，并给出要粘进那台机器
   `authorized_keys` 的那一行。机器有了它之后，连接就不再问任何东西。
 - **点标签页**只是选中它；要用面板里的 **Connect** 才开始连接。误触一个休眠的标签页不会拨号。
-- **`×`** 断开。标签页保留 —— 标签页是一台配置好的机器，不是临时视图。
+- **`×`** 断开，而且只在**当前选中**的标签页上出现 —— 切换标签不会把它误断掉。标签页保留
+  —— 标签页是一台配置好的机器，不是临时视图。
 - **长按标签页**编辑或删除这台机器。
 
 ## 文档
@@ -490,7 +492,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 51 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 55 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
@@ -525,6 +527,26 @@ this bug and not the next one; comparing the two sets catches a state added on e
 side alone, which is the shape of the mistake. Two guards keep the comparison honest:
 a selector with no unconditional default item would draw nothing at all when no state
 matches, and two empty sets are equal, so neither side may be empty.
+
+### The `×` that disconnected the tab you meant to select
+
+Reported from use on the pad: **switching tabs disconnected one instead.** The bar put
+a 22dp `×` on every tab, 4dp from the label, inside a row only 36dp tall — under the
+platform's 44dp touch guidance. The target for "select this tab" was smaller than the
+destructive one beside it, so a tap aimed at a tab's right edge stopped that machine,
+and the way back was a CONNECT. That is what made it read as "close and reconnect".
+
+The close control is now shown **only on the selected tab**, and the row is 44dp with
+10dp between the label and the `×`. It is `INVISIBLE` rather than `GONE` on the other
+tabs: the tab keeps its width, so selecting one cannot shift its neighbours under the
+next tap, and the empty area still belongs to the row — a tap there selects, which is
+the point. Stopping a session is now something done to the tab already on screen;
+switching is just switching.
+
+`TabBarTest` reads `MainActivity.kt` and `res/layout/tab.xml` as text, for the same
+reason the dot test does — nothing in the JVM source set can inflate a layout — and
+pins the three properties: the close control is tied to `index == activeIndex`, the
+row is at least 44dp, and the control is at least 8dp from the label and 24dp square.
 
 ## Building
 
