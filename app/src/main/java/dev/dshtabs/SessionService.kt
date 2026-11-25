@@ -44,12 +44,19 @@ class SessionService : Service() {
 	 */
 	override fun onTaskRemoved(rootIntent: Intent?) {
 		super.onTaskRemoved(rootIntent)
+		Diag.log("service.taskRemoved sessions=${Sessions.running.snapshot().size}")
 		for (session in Sessions.running.clear()) session.stop()
 		stopSelf()
 	}
 
+	override fun onDestroy() {
+		Diag.log("service.destroy sessions=${Sessions.running.snapshot().size}")
+		super.onDestroy()
+	}
+
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 		val label = intent?.getStringExtra(EXTRA_LABEL) ?: "a machine"
+		Diag.log("service.start label=$label sessions=${Sessions.running.snapshot().size}")
 		// Must happen promptly after startForegroundService(), or the system raises a
 		// failure on API 26+.
 		startForeground(NOTIFICATION_ID, Notifications.session(this, label))

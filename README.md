@@ -973,6 +973,36 @@ Add `--ez probeWeb true` to also load the result into a real `WebView` and repor
 the title, the URL after the token redirect, and the page text. That is how a blank
 screen becomes a sentence, and it is what proved the last link in the chain.
 
+### The connection log, for what the probe cannot see
+
+A probe is something you run *instead of* using the app. The failures that matter on a
+pad are the ones you notice **afterwards** — the page reloaded under you, the tab went
+back to CONNECT, the agent on the far side stopped mid-turn — and by then the process
+that knew why may be gone, logcat has rotated, and a release build cannot be read with
+`run-as`. Measured, 2026-11-25: a session up since 21:04 ended some time before a new
+one at 21:54, the app reconnected by itself, and the only honest answer anyone could
+give was "it reconnected". sshd on the far side logs the accepted connection and not
+its end, so there was nothing to line it up against either.
+
+So the app keeps its own record at `files/diag/connection.log`, one timestamped line per
+decision point and trimmed to the newest ~32 KB:
+
+| Line | What it settles |
+| --- | --- |
+| `activity.create restored=…`, `activity.destroy finishing=… changingConfig=…` | Whether a window was rebuilt around a surviving process (handover) or the process was started again (sessions gone) |
+| `activity.start awayMs=…`, `activity.stop` | How long the app was in the background when a connection died |
+| `network.available` / `network.lost` | Whether the network changed under the session |
+| `connect.start` / `connect.ok` / `connect.fail` | What was attempted, and the ports and platform it settled on |
+| `channel.ended code=…` | The exec channel ending — the one clean signal of a far side that went away |
+| `reconnect.attempt n=…` / `reconnect.exhausted` | Every automatic retry, with the reason it was started |
+| `probe.start` / `probe.done alive=…` | The liveness check below, and its answer |
+| `session.adopt` / `session.handover` / `session.stop` / `service.*` | Which of the four things ended the connection: the operator, a handover, a task removal, or the service |
+
+It carries no conversation, no session content and no device book — only that a
+connection did something at a time — which is what makes it safe to hand over. It
+leaves the device through the share sheet: **long-press the sync control** in the tab
+bar. That is the only way out of a release build, and it is why the log is text.
+
 ### The probe is debug-only, and that is a security boundary
 
 **It used to be reachable in a release build, and that was a real hole.** The
@@ -1424,6 +1454,35 @@ process, which no in-process fix survives. The check that settles it is one drag
 looks: connect, note the far side's `pgrep -af 'dsh web'`, enter split screen, and
 confirm the tab still says RUNNING and the pid is unchanged.
 
+### Coming back to the front is the moment to ask
+
+The registry answers "was the window rebuilt?", not "is the connection still there?".
+Between those sit the two things a phone does that no window callback reports: it leaves
+the network, and it freezes a process that is not in front. Both leave JSch's own flags
+saying *connected* — `session.isConnected` is a local boolean, not a round trip — so the
+app used to sit on RUNNING until the keepalive gave up, which is up to three missed
+intervals (60 s), with a page that never finished reloading and nothing to read.
+
+Reported from use, 2026-11-25: on the pad, during split-screen and app switching, the
+page reloaded and the app had repaired itself — correctly, by the watchdog — but nothing
+anywhere recorded *why* the connection had gone (the connection log above was added in
+the same round for exactly that). What was missing on the client side was a question.
+
+So the app now asks the WebView's question after any moment that could have changed the
+answer: **one HTTP request through the forward**, and any status at all (200, 303, 401)
+proves both halves — the local forward is bridging and the far side has a listener. A
+refusal or a timeout means it is dead, and the tab takes the watchdog's own path:
+`stopTab(keepService = true)` then `reconnect(…)`, with the reason
+"nothing answered on its forwarded port". It runs on `onStart` when the window was
+actually away, and on the platform's network-available callback, debounced to once per
+five seconds so a network change that also brings the app forward is one probe rather
+than two.
+
+**What this does not fix.** A reconnect still starts a *new* `dsh web`, so the page
+reloads and whatever was running on the far side dies with the old one. The probe makes
+the dead period short and the reason recorded; making the connection survive it is the
+harness-reuse change in the known gaps.
+
 ## Known gaps
 
 - **Doze will eventually stall a session.** A foreground service keeps the process
@@ -1489,6 +1548,14 @@ confirm the tab still says RUNNING and the pid is unchanged.
   `onCreate` starts from the book as IDLE, and the operator connects again. Nothing in
   this client can change that without a reconnect, which would start a *new* `dsh web`
   and lose the conversation that was on the far side.
+- **A reconnect always replaces the far side's Harness.** Automatic reconnects (the exec
+  channel ending, or the liveness probe finding nothing on the forwarded port) start a
+  fresh `dsh web` on a new port, so the page reloads to the Harness and anything running
+  on the far side at that moment ends with the old server. The liveness probe narrows
+  the dead window and the connection log records why; making the connection *survive* a
+  drop needs the far side to outlive the SSH connection and publish its URL for the next
+  connect to attach to — a change to the launch protocol in both clients, which is not
+  done.
 - **A dead renderer leaves its tab asking.** One renderer serves every tab, so an
   out-of-memory in one remote page ends that page for all of them — the app now
   survives it (`onRenderProcessGone` returning `true` is what used to kill the

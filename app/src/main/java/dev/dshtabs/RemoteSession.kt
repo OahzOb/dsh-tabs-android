@@ -100,6 +100,57 @@ class RemoteSession private constructor(
 	/** True once the session is no longer usable. */
 	val isAlive: Boolean get() = session.isConnected && channel.isConnected
 
+	/**
+	 * Whether the far side still answers on this session's forwarded port.
+	 *
+	 * **The transport saying "connected" is not the same as the Harness answering.**
+	 * `isAlive` reads two JSch flags; they stay true across a remote program that has
+	 * died, across a phone that has left the network and come back, and across a
+	 * half-open socket the platform killed while the app was frozen. What the operator
+	 * sees in all three cases is a page that never finishes reloading, and the app sits
+	 * on RUNNING until the socket error finally surfaces — up to the keepalive's three
+	 * missed intervals.
+	 *
+	 * So the question is asked the way the WebView would ask it: one request through
+	 * the forward. Any HTTP answer proves both halves (the local forward is bridging and
+	 * the far side has a listener), which is why a `401` or a `303` counts as alive —
+	 * they are the Harness refusing an unauthenticated request, not a dead port.
+	 *
+	 * @param timeoutMs - the whole budget for the request, connect and read.
+	 * @returns true when something answered; false on any failure, including a refusal.
+	 */
+	suspend fun responds(timeoutMs: Long = 4_000): Boolean = withContext(Dispatchers.IO) {
+		val probe = try {
+			val parsed = java.net.URL(url)
+			java.net.URL("${parsed.protocol}://${parsed.host}:${parsed.port}/")
+		} catch (_: Exception) {
+			return@withContext false
+		}
+		val connection = try {
+			(probe.openConnection() as java.net.HttpURLConnection).apply {
+				connectTimeout = timeoutMs.toInt()
+				readTimeout = timeoutMs.toInt()
+				instanceFollowRedirects = false
+				useCaches = false
+				requestMethod = "GET"
+			}
+		} catch (_: Throwable) {
+			return@withContext false
+		}
+		try {
+			connection.responseCode
+			true
+		} catch (_: Throwable) {
+			false
+		} finally {
+			try {
+				connection.disconnect()
+			} catch (_: Throwable) {
+				/* nothing to release that matters */
+			}
+		}
+	}
+
 	/** What the remote program reported when it exited, or -1 while it is still running. */
 	val exitStatus: Int get() = if (channel.isClosed) channel.exitStatus else -1
 

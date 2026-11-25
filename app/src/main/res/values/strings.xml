@@ -14,6 +14,7 @@
 	<string name="transcript">Transcript</string>
 	<string name="reconnecting">The server on %1$s stopped%2$s.\n\nStarting a new one — attempt %3$d of %4$d…</string>
 	<string name="reconnect_exhausted">The server on %1$s stopped %2$d times in a row%3$s, so this app has stopped trying. Tap Try again to start one by hand.</string>
+	<string name="reconnect_no_answer"> because nothing answered on its forwarded port</string>
 
 	<!-- the renderer dying: the page is gone, and so is the session behind it -->
 	<string name="renderer_crashed">The page for %1$s crashed its renderer. Tap Try again to connect to that machine afresh.</string>
@@ -71,4 +72,9 @@
 	<string name="update_open_settings">Open settings</string>
 	<string name="update_installing">Opening the installer…</string>
 	<string name="update_bad_apk">The downloaded update could not be verified: %1$s</string>
+
+	<!-- the connection log, which leaves the device through the share sheet -->
+	<string name="diag_share">Share connection log</string>
+	<string name="diag_subject">dsh-tabs %1$s diagnostics</string>
+	<string name="diag_failed">Could not share the log: %1$s</string>
 </resources>

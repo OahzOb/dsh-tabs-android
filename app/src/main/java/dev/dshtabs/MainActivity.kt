@@ -182,6 +182,18 @@ class MainActivity : AppCompatActivity() {
 	 */
 	private val reconnectAttempts = mutableMapOf<String, Int>()
 
+	/**
+	 * When the window last went to the background, or 0 while it is in front.
+	 *
+	 * Recorded for one log line: when the app comes back, "away 4m12s" is what turns a
+	 * report of "it disconnected while I was in another app" into something a reader
+	 * can match against the far side's `sshd` events.
+	 */
+	private var backgroundedAt = 0L
+
+	/** When the far side was last asked whether it still answers; see [PROBE_INTERVAL_MS]. */
+	private var lastProbeAt = 0L
+
 	private lateinit var tabsRow: LinearLayout
 	private lateinit var webHost: android.widget.FrameLayout
 
@@ -229,6 +241,11 @@ class MainActivity : AppCompatActivity() {
 
 		setContentView(R.layout.activity_main)
 
+		// The first line of any report from this device. `restored` is the one flag that
+		// separates "the window was rebuilt around a surviving process" from "the process
+		// was started again", which are the two different answers to a dropped session.
+		Diag.log("activity.create restored=${savedInstanceState != null}")
+
 		tabsRow = findViewById(R.id.tabs)
 		webHost = findViewById(R.id.webHost)
 		panel = findViewById(R.id.panel)
@@ -245,6 +262,13 @@ class MainActivity : AppCompatActivity() {
 		findViewById<ImageButton>(R.id.add).setOnClickListener { showDeviceDialog(null) }
 		updateButton = findViewById(R.id.update)
 		updateButton.setOnClickListener { checkForUpdates(manual = true) }
+		// The log has no screen of its own: it is only ever needed after something went
+		// wrong, and long-press is the one gesture the tab bar has left. See `Diag`.
+		updateButton.setOnLongClickListener {
+			shareDiagnostics()
+			true
+		}
+		watchNetwork()
 		applyWindowInsets()
 		// Called at startup as well as on a mode change, so the two paths cannot
 		// disagree about what this window looks like. See `applyChromeColors`.
@@ -291,6 +315,7 @@ class MainActivity : AppCompatActivity() {
 			tab.session = session
 			tab.state = State.RUNNING
 			tab.pageUrl = pageUrlFor(session)
+			Diag.log("session.adopt device=${tab.device.id} localPort=${session.localPort}")
 			if (first == null) first = tab
 		}
 
@@ -421,6 +446,11 @@ class MainActivity : AppCompatActivity() {
 
 	override fun onDestroy() {
 		super.onDestroy()
+		Diag.log(
+			"activity.destroy finishing=$isFinishing changingConfig=$isChangingConfigurations " +
+				"sessions=${Sessions.running.snapshot().size}"
+		)
+		unregisterNetworkCallback()
 		// This window must not react to a handover any more: the next one is the one
 		// that will adopt, and a posted `render` here would draw a view tree that is
 		// already gone. It removes only its own observer — an OEM relaunch can overlap
@@ -441,6 +471,7 @@ class MainActivity : AppCompatActivity() {
 		destroyed = true
 		if (isFinishing) {
 			// The operator left: end everything with the task, as Back and × always have.
+			Diag.log("session.stopAll finishing=true")
 			for (tab in tabs) {
 				Sessions.running.remove(tab.device.id)
 				tab.stop()
@@ -463,10 +494,139 @@ class MainActivity : AppCompatActivity() {
 			val session = tab.session ?: continue
 			val displaced = Sessions.running.adopt(tab.device.id, session)
 			if (displaced != null && displaced !== session) displaced.stop()
+			Diag.log("session.handover device=${tab.device.id}")
 			// The registry owns it now; `tab.stop()` would stop it as well.
 			tab.session = null
 		}
 		if (Sessions.running.isEmpty()) SessionService.stop(this)
+	}
+
+	/**
+	 * The moment a connection that was out of sight is known to be suspect.
+	 *
+	 * Leaving the foreground is where the platform, the network and the far side can
+	 * each quietly change under a session — and the app had nothing to say about any of
+	 * them: no `onStart`, no network callback, and a JSch keepalive that takes up to
+	 * three missed intervals (60 s) to notice a socket that died silently. Measured on
+	 * the pad, 2026-11-25: the page reloaded under the operator, and neither the device
+	 * nor the machine on the other end recorded why.
+	 *
+	 * So coming back asks each running session whether it still answers
+	 * ([verifyRunningSessions]) and repairs it the same way the exec-channel watchdog
+	 * would. The line "awayMs" is what lets a reader line this up with the far side's
+	 * own events.
+	 */
+	override fun onStart() {
+		super.onStart()
+		val away = if (backgroundedAt == 0L) 0L else System.currentTimeMillis() - backgroundedAt
+		backgroundedAt = 0L
+		Diag.log("activity.start awayMs=$away")
+		// A first start has nothing to be suspicious of; a return does.
+		if (away > 0L) verifyRunningSessions("app returned")
+	}
+
+	override fun onStop() {
+		backgroundedAt = System.currentTimeMillis()
+		Diag.log("activity.stop")
+		super.onStop()
+	}
+
+	// ------------------------------------------------------------ diagnostics
+
+	/**
+	 * Ask each running session whether the far side still answers, and start the retry
+	 * when it does not.
+	 *
+	 * **This is the half the exec-channel watchdog cannot see.** That watchdog fires on
+	 * a channel that *ends*, which is a clean event; a phone that leaves the network, or
+	 * a process the platform froze for a while, leaves JSch's flags saying "connected"
+	 * until its keepalive gives up — up to three missed intervals. What the operator
+	 * sees in the meantime is a page that never finishes reloading, on a tab that says
+	 * RUNNING and gives them nothing to press.
+	 *
+	 * So the app asks the question the WebView would ask — one request through the
+	 * forward — and takes exactly the path the watchdog takes when the answer is no.
+	 * Both prompts are moments when something outside the app changed (it came back to
+	 * the front, or the network came back), and the probe is debounced and only runs for
+	 * tabs that are RUNNING, so its cost is one loopback request per live session.
+	 *
+	 * @param reason - what prompted the check, for the log line.
+	 */
+	private fun verifyRunningSessions(reason: String) {
+		if (destroyed || isFinishing || isDestroyed) return
+		val now = System.currentTimeMillis()
+		if (now - lastProbeAt < PROBE_INTERVAL_MS) return
+		lastProbeAt = now
+		val running = tabs.withIndex().filter { it.value.state == State.RUNNING && it.value.session != null }
+		if (running.isEmpty()) return
+		Diag.log("probe.start reason=$reason tabs=${running.size}")
+		for ((index, tab) in running) {
+			val session = tab.session ?: continue
+			val attempt = tab.attempt
+			lifecycleScope.launch {
+				val alive = session.responds()
+				Diag.log("probe.done device=${tab.device.id} alive=$alive")
+				// Every suspension point re-checks that this probe still owns the tab;
+				// the answer to a question asked about a session that has since been
+				// replaced is not an answer about anything.
+				if (!isCurrentAttempt(tab, attempt)) return@launch
+				if (tab.session !== session || tab.state != State.RUNNING) return@launch
+				if (alive) return@launch
+				stopTab(index, keepService = true)
+				reconnect(index, getString(R.string.reconnect_no_answer))
+			}
+		}
+	}
+
+	/**
+	 * A network that came back is the other moment a connection either survived or did
+	 * not: an app that reconnects only when the operator taps is an app that sat on a
+	 * dead socket for as long as nobody looked.
+	 */
+	private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+		override fun onAvailable(network: android.net.Network) {
+			Diag.log("network.available")
+			verifyRunningSessions("network available")
+		}
+
+		override fun onLost(network: android.net.Network) {
+			Diag.log("network.lost")
+		}
+	}
+
+	private fun watchNetwork() {
+		try {
+			getSystemService(android.net.ConnectivityManager::class.java)
+				?.registerDefaultNetworkCallback(networkCallback)
+		} catch (error: Throwable) {
+			// A device that refuses one still works; it only loses the line that says the
+			// network changed under it, which is the line this file exists to keep.
+			Diag.log("network.unwatchable reason=${error.javaClass.simpleName}")
+		}
+	}
+
+	private fun unregisterNetworkCallback() {
+		try {
+			getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(networkCallback)
+		} catch (_: Throwable) {
+			/* never registered, or already gone */
+		}
+	}
+
+	/**
+	 * Hand the connection log to the share sheet.
+	 *
+	 * Long-press the sync control. There is no diagnostics screen on purpose: this is
+	 * read after a failure, usually on another machine, by someone who wants the text —
+	 * and a release build cannot be read with `run-as`.
+	 */
+	private fun shareDiagnostics() {
+		Diag.log("diag.share")
+		try {
+			startActivity(Intent.createChooser(Diag.intent(this), getString(R.string.diag_share)))
+		} catch (error: Throwable) {
+			toast(getString(R.string.diag_failed, error.message ?: error.javaClass.simpleName))
+		}
 	}
 
 	// ---------------------------------------------------------------- webview
@@ -807,6 +967,7 @@ class MainActivity : AppCompatActivity() {
 			 */
 			override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
 				val id = views.entries.firstOrNull { it.value.view === view }?.key
+				Diag.log("webview.rendererGone device=${id ?: "?"} didCrash=${detail.didCrash()}")
 				// Destroyed rather than hidden: a view whose renderer is gone can never
 				// paint again, and leaving it in the tree would keep `renderContent` from
 				// ever building its replacement.
@@ -1131,9 +1292,11 @@ class MainActivity : AppCompatActivity() {
 		val tab = tabs.getOrNull(index) ?: return
 		val attempt = (reconnectAttempts[tab.device.id] ?: 0) + 1
 		reconnectAttempts[tab.device.id] = attempt
+		Diag.log("reconnect.attempt device=${tab.device.id} n=$attempt detail=${detail.take(160)}")
 
 		if (attempt > RECONNECT_ATTEMPTS) {
 			reconnectAttempts.remove(tab.device.id)
+			Diag.log("reconnect.exhausted device=${tab.device.id}")
 			tab.state = State.FAILED
 			tab.error = getString(R.string.reconnect_exhausted, tab.device.display, RECONNECT_ATTEMPTS, detail)
 			// The budget was the only reason the service was still up: `stopTab` below
@@ -1178,6 +1341,7 @@ class MainActivity : AppCompatActivity() {
 	 */
 	private fun startSession(index: Int, secret: String?, isReconnect: Boolean = false) {
 		val tab = tabs.getOrNull(index) ?: return
+		Diag.log("connect.start device=${tab.device.id} reconnect=$isReconnect")
 		tab.stop()
 		// The session that just stopped has minted its last cookie, and the next page's
 		// first request is an SSH handshake and a `dsh web` start away — so this is the
@@ -1260,6 +1424,10 @@ class MainActivity : AppCompatActivity() {
 						is SessionStart.Ok -> {
 							tab.session = result.session
 							tab.state = State.RUNNING
+							Diag.log(
+								"connect.ok device=${tab.device.id} localPort=${result.session.localPort} " +
+									"remotePort=${result.session.remotePort} platform=${result.session.platform}"
+							)
 							// A freshly opened session is loaded from its token URL. Once it is
 							// adopted after a recreate, `pageUrl` is the origin instead; see the
 							// `Tab.pageUrl` documentation.
@@ -1288,6 +1456,7 @@ class MainActivity : AppCompatActivity() {
 							// rather than a spinner that never resolves.
 							result.session.watchUntilEnded { code ->
 								if (tab.session !== result.session || tab.state != State.RUNNING) return@watchUntilEnded
+								Diag.log("channel.ended device=${tab.device.id} code=$code")
 								// Stop first, then write the reason: `stopTab` deliberately
 								// resets a stopped tab to idle with no error, which is right for
 								// the × button and wrong here. Measured: the other order made the
@@ -1308,6 +1477,7 @@ class MainActivity : AppCompatActivity() {
 							tab.state = State.FAILED
 							tab.error = result.error
 							tab.lines = result.transcript
+							Diag.log("connect.fail device=${tab.device.id} error=${result.error.take(160)}")
 							// A failed password is very likely wrong rather than stale, so
 							// forget it and ask again next time instead of retrying the same
 							// string.
@@ -1386,7 +1556,10 @@ class MainActivity : AppCompatActivity() {
 				it.state == State.RUNNING || it.state == State.STARTING ||
 					(reconnectAttempts[it.device.id] ?: 0) > 0
 			})
-		if (!busy) SessionService.stop(this)
+		if (!busy) {
+			Diag.log("service.stop idle")
+			SessionService.stop(this)
+		}
 	}
 
 	/**
@@ -1401,6 +1574,7 @@ class MainActivity : AppCompatActivity() {
 	 */
 	private fun stopTab(index: Int, keepService: Boolean = false) {
 		val tab = tabs.getOrNull(index) ?: return
+		Diag.log("session.stop device=${tab.device.id} keepService=$keepService state=${tab.state}")
 		tab.stop()
 		tab.state = State.IDLE
 		tab.error = null
@@ -1876,6 +2050,16 @@ class MainActivity : AppCompatActivity() {
 
 		/** How long to wait before an automatic reconnect; the old server needs to go. */
 		const val RECONNECT_DELAY_MS = 2_500L
+
+		/**
+		 * How often the far side may be probed for liveness.
+		 *
+		 * A probe on every foreground return and every network change would be a
+		 * request per app switch; five seconds collapses the burst a network change
+		 * and a foreground return can produce in the same moment, without delaying a
+		 * check that matters.
+		 */
+		const val PROBE_INTERVAL_MS = 5_000L
 
 		/** Where the update check's timestamp lives. */
 		const val UPDATE_PREFERENCES = "updates"

@@ -17,6 +17,10 @@ class App : Application() {
 		super.onCreate()
 		DeviceBook.init(filesDir)
 		Keys.init(this)
+		// Before anything can log an event: a connect can start from a notification tap
+		// on a process the system restarted, and the first thing it would write is the
+		// one line that explains why it is the first.
+		Diag.install(filesDir)
 		installBouncyCastle()
 		recordCrashes()
 		createNotificationChannel()
