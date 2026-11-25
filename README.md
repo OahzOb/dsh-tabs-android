@@ -94,6 +94,14 @@ in the tab bar checks immediately. A newer release is offered with its notes; th
 is downloaded only when **Download** is tapped, its SHA-256 and signing certificate are
 checked against this install, and Android's own installer asks for confirmation.
 
+**A downloaded APK is kept until it is installed**, and the offer knows it: a release
+that was downloaded and then dismissed at the installer is offered again as
+**Install** — the file is re-verified against this install's signature instead of being
+fetched a second time. It is deleted when a fresh download supersedes it, or when a
+check says this build is already the latest, so the cache holds at most the one release
+being offered. Dismissing the installer once used to cost the whole 18 MB again on the
+next check; from `0.2.4` it does not.
+
 The check is a plain unauthenticated GET to GitHub's public release API. It sends no
 device, book or session data; what is downloaded is trusted through GitHub over HTTPS
 and the APK's signature, which is the same key that signed the installed app. Android
@@ -224,6 +232,11 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 从 `0.2.0` 起，应用启动时每天最多检查一次 GitHub Releases，标签栏里的同步按钮则立即检查。
 发现新版本会先给出说明；只有点 **Download** 才会下载，下载后用 SHA-256 和签名证书与已安装
 版本比对，再交给 Android 系统安装器让用户确认。
+
+**下载好的 APK 会一直留着，直到它被安装**，而且检查时知道这件事：已经下载、但在安装器里被
+取消的版本，下次会直接作为 **Install** 提供 —— 只会重新校验签名，不会再下载一遍。它会在
+新的下载取代它、或者检查发现当前已是最新时被删除，所以缓存里最多只有正在被提供的这一个版本。
+以前取消一次安装器，下次检查就要再花一次 18 MB；`0.2.4` 起不会了。
 
 检查是一次不带凭据的 GitHub 公共 Release API GET，不发送设备、设备簿或会话数据；下载内容
 的信任来自 GitHub HTTPS 加 APK 签名，也就是给已安装版本签名的那把密钥。Android 仍会在第一次

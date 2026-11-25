@@ -34,6 +34,13 @@ import java.security.MessageDigest
  * `0.10.0` is newer than `0.9.0`. The APK's `versionCode` is the second opinion: a
  * tag can be bumped without rebuilding, and that is exactly the mistake this check
  * should refuse rather than install.
+ *
+ * **A downloaded APK is kept until it is installed, and that is a feature.** The offer
+ * asks the cache first, so a release that was downloaded and then dismissed at the
+ * system installer is offered again as **Install** instead of being fetched a second
+ * time; the file is deleted when a fresh download supersedes it, or when a check says
+ * this build is already the latest. See [updateCacheName] for the naming rule that
+ * makes the file findable.
  */
 object Updates {
 
@@ -142,8 +149,14 @@ object Updates {
 		onProgress: (Int) -> Unit
 	): Download = withContext(Dispatchers.IO) {
 		var connection: HttpURLConnection? = null
-		val directory = File(context.cacheDir, "updates").apply { mkdirs() }
-		val target = File(directory, "dsh-tabs-android-${update.version}.apk")
+		val target = cachedFile(context, update.version)
+		// **A download that was not installed is not a download that has to happen
+		// again.** The cached file survives the process and the dialog: it is only gone
+		// when the install completed (the next build prunes it) or a newer release
+		// replaced it. Dismissing the system installer and checking again used to cost
+		// the whole APK a second time, which on 18 MB is the difference between an
+		// update people apply and one they postpone.
+		reusable(context, target)?.let { return@withContext it }
 		try {
 			if (target.exists()) target.delete()
 			connection = (URL(update.url).openConnection() as HttpURLConnection).apply {
@@ -179,12 +192,76 @@ object Updates {
 				target.delete()
 				return@withContext Download.Failed("the APK's SHA-256 does not match the release")
 			}
-			verify(context, target)
+			val checked = verify(context, target)
+			// A fresh download supersedes every older cached release, and Android will
+			// not install one at or below the installed version anyway.
+			if (checked is Download.Ready) prune(context, update.version, target)
+			checked
 		} catch (error: Exception) {
 			target.delete()
 			Download.Failed(error.message ?: error.javaClass.simpleName)
 		} finally {
 			connection?.disconnect()
+		}
+	}
+
+	/**
+	 * The cached APK for one release, when there is a valid one.
+	 *
+	 * The offer dialog asks this before drawing its button, so a release that is
+	 * already on disk is offered as an **install** rather than as a download.
+	 *
+	 * @param context - the application context, for the cache.
+	 * @param version - the release version.
+	 * @returns the verified file, or null when nothing usable is cached.
+	 */
+	suspend fun cached(context: Context, version: String): Download.Ready? =
+		withContext(Dispatchers.IO) { reusable(context, cachedFile(context, version)) }
+
+	/**
+	 * Delete cached APKs that [atOrBelow] supersedes.
+	 *
+	 * Called when a check says this build is the latest (everything at or below the
+	 * installed version can never be installed) and after a fresh download (every
+	 * older release has just been superseded). Anything this app did not name is left
+	 * alone, so a foreign file in the cache directory is not the updater's business.
+	 *
+	 * @param context - the application context, for the cache.
+	 * @param atOrBelow - the version that now covers everything older.
+	 * @param keep - a file to leave alone even when the rule applies to it.
+	 * @returns nothing.
+	 */
+	suspend fun prune(context: Context, atOrBelow: String, keep: File? = null): Unit = withContext(Dispatchers.IO) {
+		File(context.cacheDir, "updates").listFiles()?.forEach { file ->
+			if (file != keep && updateCacheIsObsolete(file.name, atOrBelow)) file.delete()
+		}
+	}
+
+	/**
+	 * Where one release's APK is cached until it is installed.
+	 * @param context - the application context, for the cache directory.
+	 * @param version - the release version.
+	 * @returns the file, whether or not it exists yet.
+	 */
+	private fun cachedFile(context: Context, version: String): File =
+		File(File(context.cacheDir, "updates").apply { mkdirs() }, updateCacheName(version))
+
+	/**
+	 * Verify a cached APK and hand it back when it is still installable.
+	 *
+	 * [verify] is the same check a fresh download goes through — package, newer
+	 * `versionCode`, signing certificate — and it deletes the file when it fails, so a
+	 * corrupted or foreign file is replaced rather than trusted.
+	 *
+	 * @param context - the application context.
+	 * @param file - the cached file, which may not exist.
+	 * @returns `Ready`, or null when there is nothing reusable.
+	 */
+	private fun reusable(context: Context, file: File): Download.Ready? {
+		if (!file.exists()) return null
+		return when (val checked = verify(context, file)) {
+			is Download.Ready -> checked
+			is Download.Failed -> null
 		}
 	}
 

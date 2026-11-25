@@ -1720,6 +1720,9 @@ class MainActivity : AppCompatActivity() {
 		preferences.edit().putLong(KEY_LAST_CHECK, now).apply()
 		lifecycleScope.launch {
 			val result = Updates.check()
+			// An installed release makes every cached APK at or below it uninstallable;
+			// letting them sit is the largest thing this app caches for nothing.
+			if (result is Updates.Check.Current) Updates.prune(this@MainActivity, BuildConfig.VERSION_NAME)
 			if (result is Updates.Check.Newer && !isFinishing && !isDestroyed) showUpdate(result.update)
 		}
 	}
@@ -1735,7 +1738,10 @@ class MainActivity : AppCompatActivity() {
 		lifecycleScope.launch {
 			when (val result = Updates.check()) {
 				is Updates.Check.Newer -> showUpdate(result.update)
-				is Updates.Check.Current -> if (manual) toast(getString(R.string.update_current))
+				is Updates.Check.Current -> {
+					Updates.prune(this@MainActivity, BuildConfig.VERSION_NAME)
+					if (manual) toast(getString(R.string.update_current))
+				}
 				is Updates.Check.Failed -> if (manual) toast(getString(R.string.update_failed, result.reason))
 			}
 		}
@@ -1743,17 +1749,30 @@ class MainActivity : AppCompatActivity() {
 
 	/**
 	 * Offer a newer release, with its notes, and download only if the operator says so.
+	 *
+	 * The offer asks the cache first. A release that was downloaded and then **not**
+	 * installed is still on disk and still verifies, so it is offered as an install —
+	 * dismissing the system installer once no longer makes the next check fetch the
+	 * whole APK again.
+	 *
 	 * @param update - the release the check found.
 	 */
 	private fun showUpdate(update: Updates.Available) {
 		if (isFinishing || isDestroyed) return
-		val notes = update.notes.take(4000).ifBlank { getString(R.string.update_no_notes) }
-		AlertDialog.Builder(this)
-			.setTitle(getString(R.string.update_available, update.version))
-			.setMessage(notes)
-			.setPositiveButton(R.string.update_download) { _, _ -> downloadUpdate(update) }
-			.setNegativeButton(R.string.update_later, null)
-			.show()
+		lifecycleScope.launch {
+			val ready = Updates.cached(this@MainActivity, update.version)
+			if (isFinishing || isDestroyed) return@launch
+			val notes = update.notes.take(4000).ifBlank { getString(R.string.update_no_notes) }
+			val message = if (ready == null) notes else getString(R.string.update_cached, notes)
+			AlertDialog.Builder(this@MainActivity)
+				.setTitle(getString(R.string.update_available, update.version))
+				.setMessage(message)
+				.setPositiveButton(if (ready == null) R.string.update_download else R.string.update_install) { _, _ ->
+					if (ready == null) downloadUpdate(update) else installUpdate(ready.file)
+				}
+				.setNegativeButton(R.string.update_later, null)
+				.show()
+		}
 	}
 
 	/**

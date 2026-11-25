@@ -62,6 +62,8 @@
 	<string name="update_available">Version %1$s is available</string>
 	<string name="update_no_notes">No release notes were provided.</string>
 	<string name="update_download">Download</string>
+	<string name="update_install">Install</string>
+	<string name="update_cached">Already downloaded — install it without downloading again.\n\n%1$s</string>
 	<string name="update_later">Later</string>
 	<string name="update_downloading">Downloading %1$s…</string>
 	<string name="update_permission_title">Allow installs</string>
