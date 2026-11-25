@@ -267,6 +267,25 @@ object Remote {
 		// launcher is about to run `FALLBACK <script>`, which is a command-not-found
 		// dressed up as a launch. Said out loud, with where it looked.
 		parts += "if (\$node -eq 'FALLBACK') { [Console]::Error.WriteLine(\"no node.exe on this Windows host: looked in \$shimDir, \$env:ProgramFiles\\nodejs and on PATH\"); exit 127 }"
+		// **A launch that outlives its client is only visible at the next launch, so the
+		// next launch is what has to repair it.** The stdin contract below fires when the
+		// connection ends, but a client that goes away without ending it leaves a Harness
+		// that outlives every later connection and keeps the Sessions' write leases —
+		// and DSH gives a Session one writer, so the next window cannot open them at all
+		// (`session/writer-held`, the UI's "当前会话已被占用…"). Measured on a real Windows
+		// remote on 2026-11-25: four minutes of exactly that, after the same tablet had
+		// already reconnected. The launch now records what it started and the next launch
+		// kills that record, so the leak is repaired by the next connect instead of by hand.
+		//
+		// The record holds the supervisor's pid as well as the Harness's, because the
+		// supervisor is the ancestor `taskkill /T` can walk, and a supervisor whose
+		// connection never ended otherwise waits on stdin for ever. A pid is not evidence
+		// on its own: each is killed only while it still carries the identity this
+		// launcher gave it (a `powershell.exe` running `-EncodedCommand`, or a `node.exe`
+		// carrying this exact argv), so a recycled pid cannot take anything else with it.
+		parts += "\$mroot = \$env:LOCALAPPDATA; if ([string]::IsNullOrEmpty(\$mroot)) { \$mroot = \$env:TEMP }"
+		parts += "\$marker = Join-Path \$mroot 'dsh-tabs\\remote-harness.json'"
+		parts += "if (Test-Path -LiteralPath \$marker) { \$old = \$null; try { \$old = Get-Content -LiteralPath \$marker -Raw | ConvertFrom-Json } catch { }; if (\$null -ne \$old) { \$hp = \$null; \$sp = \$null; if (\$null -ne \$old.pid) { try { \$hp = Get-CimInstance Win32_Process -Filter \"ProcessId=\$(\$old.pid)\" } catch { } }; if (\$null -ne \$old.sup) { try { \$sp = Get-CimInstance Win32_Process -Filter \"ProcessId=\$(\$old.sup)\" } catch { } }; if (\$null -ne \$hp -and \$hp.Name -eq 'node.exe' -and \$hp.CommandLine -and \$hp.CommandLine.Contains(' web --no-open --port 0')) { taskkill /PID \$hp.ProcessId /T /F 2>&1 | Out-Null; [Console]::Error.WriteLine(\"launch reaped harness=\$(\$hp.ProcessId)\") }; if (\$null -ne \$sp -and \$sp.Name -eq 'powershell.exe' -and \$sp.CommandLine -and \$sp.CommandLine.Contains('-EncodedCommand')) { taskkill /PID \$sp.ProcessId /T /F 2>&1 | Out-Null; [Console]::Error.WriteLine(\"launch reaped supervisor=\$(\$sp.ProcessId)\") } }; Remove-Item -LiteralPath \$marker -Force -ErrorAction SilentlyContinue }"
 		if (dir.isNotEmpty()) {
 			// **One statement, and it has to stay one.** The statements here are joined
 			// with `"; "`, so writing the tilde translation as three parts puts a
@@ -295,6 +314,11 @@ object Remote {
 		parts += "[Console]::Error.WriteLine(\"launch script=\$binJs exists=\$(Test-Path -LiteralPath \$binJs)\")"
 		parts += "[Console]::Error.WriteLine(\"launch cwd=\$((Get-Location).Path)\")"
 		parts += "\$proc = Start-Process -FilePath \$node -ArgumentList \$argv -NoNewWindow -PassThru"
+		// The record is written as soon as the process exists and before anything else can
+		// fail, because it is what makes this launch findable if the teardown below never
+		// runs. A failure to write it is swallowed: refusing a launch over its bookkeeping
+		// would leak exactly the Harness the bookkeeping exists to catch.
+		parts += "try { New-Item -ItemType Directory -Path (Split-Path -Parent \$marker) -Force | Out-Null; @{ sup = \$PID; pid = \$proc.Id; started = (Get-Date).ToString('o'); node = \$node; binJs = \$binJs; cwd = (Get-Location).Path } | ConvertTo-Json -Compress | Set-Content -LiteralPath \$marker -Encoding UTF8 } catch { }"
 		parts += "\$sw = [Diagnostics.Stopwatch]::StartNew()"
 		// A server that could not start must not become silence. Without this the program
 		// sits in `ReadToEnd()` for ever while the client waits for a readiness line that
@@ -310,7 +334,7 @@ object Remote {
 		// loop. Verified on PowerShell 5.1 — `WaitForExit()` and `Refresh()` do not fill
 		// it in either. The blank is kept rather than papered over.
 		parts += "while (\$sw.Elapsed.TotalSeconds -lt 60) { if (\$proc.HasExited) { [Console]::Error.WriteLine(\"dsh exited with code \$(\$proc.ExitCode) before announcing a URL\"); break }; Start-Sleep -Milliseconds 500 }"
-		parts += "try { [Console]::In.ReadToEnd() | Out-Null } finally { if (\$null -ne \$proc -and -not \$proc.HasExited) { taskkill /PID \$proc.Id /T /F 2>&1 | Out-Null } }"
+		parts += "try { [Console]::In.ReadToEnd() | Out-Null } finally { if (\$null -ne \$proc -and -not \$proc.HasExited) { taskkill /PID \$proc.Id /T /F 2>&1 | Out-Null }; \$mine = \$null; try { \$mine = Get-Content -LiteralPath \$marker -Raw | ConvertFrom-Json } catch { }; if (\$null -ne \$mine -and \$mine.sup -eq \$PID) { Remove-Item -LiteralPath \$marker -Force -ErrorAction SilentlyContinue } }"
 		return parts.joinToString("; ")
 	}
 

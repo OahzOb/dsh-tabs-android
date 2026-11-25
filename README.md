@@ -1449,13 +1449,25 @@ confirm the tab still says RUNNING and the pid is unchanged.
   Both clients have now been run against a real Windows host — the build machine, which
   is the same machine `box-b` stood in for. What that round cost is written down above:
   the profile-link failure, the 431 behind a valid token, and the abandoned channel.
-- **A Windows remote can keep its `dsh web` after the client disconnects.** Measured on
-  the build machine through the emulator: after × the tab went IDLE and `SessionService`
-  stopped, but the far side's `node … dsh web --no-open --port 0` was still running
-  minutes later. The POSIX path reaps (the verification table above), so the difference
-  is the Windows launcher: its remote script waits on stdin and is meant to `taskkill`
-  the child in a `finally`, and that finaliser did not run here. Not diagnosed further —
-  it is a leaked remote process, not a client-visible failure.
+- **A Windows remote can keep its `dsh web` after the client disconnects — now repaired by
+  the next launch.** Measured on the build machine through the emulator: after × the tab
+  went IDLE and `SessionService` stopped, but the far side's `node … dsh web --no-open
+  --port 0` was still running minutes later. The POSIX path reaps (the verification table
+  above), so the difference is the Windows launcher: its remote script waits on stdin and
+  is meant to `taskkill` the child in a `finally`, and that finaliser did not run here.
+  What that was hiding showed up on 2026-11-25: a leaked Harness still held the kernel
+  write lease of every Session it had open, so the next connection — which starts a
+  *new* Harness on a new port — could not open those Sessions at all
+  (`session/writer-held`, the UI's "当前会话已被占用…"). Two Harnesses over one DSH home
+  can never share a Session's single writer, so the Windows program now records what it
+  started (`%LOCALAPPDATA%\dsh-tabs\remote-harness.json`: the launcher's pid and the
+  Harness's) and the **next launch reaps that record before it starts anything**, killing
+  a pid only while it still carries the identity the launcher gave it. The teardown on a
+  clean disconnect is unchanged, and the record is removed by the launch that wrote it.
+  Verified against a fake shim and a fake `bin.js` (no real DSH home involved): the second
+  launch kills both processes of a stale first one, takes the record over, and cleans up
+  after itself. The statements are byte-identical to the desktop copy, which is what
+  `RemoteParityTest` checks.
 - **Sessions live in the process, so a process death still drops them.** A window that is
   recreated — a configuration change, an OEM relaunch for split screen — hands its
   connections to `Sessions` and the next window adopts them: the SSH session, the forward

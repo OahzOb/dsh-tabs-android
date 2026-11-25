@@ -255,6 +255,18 @@ class RemoteParityTest {
 			// than the one process, because the Harness is free to spawn under it.
 			"[Console]::In.ReadToEnd()",
 			"taskkill /PID \$proc.Id /T /F",
+			// The stale-launch half of the same contract: a launch that outlived its own
+			// client is reaped by the next one, and by identity rather than by pid alone
+			// (a recycled pid must never take an unrelated process with it). Measured on
+			// a real Windows remote: four minutes of a previous Harness holding every
+			// Session's write lease while the operator's window could not open them.
+			"remote-harness.json",
+			"sup = \$PID",
+			"launch reaped harness=",
+			"launch reaped supervisor=",
+			"\$hp.CommandLine.Contains(' web --no-open --port 0')",
+			"\$sp.CommandLine.Contains('-EncodedCommand')",
+			"\$mine.sup -eq \$PID",
 			// stdout is inherited, never redirected: a temp file would make the
 			// readiness line's readability depend on a file-sharing mode.
 			"'web','--no-open','--port','0'",
