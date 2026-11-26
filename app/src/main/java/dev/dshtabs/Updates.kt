@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -19,15 +20,21 @@ import java.security.MessageDigest
  * with its own key and installed from an APK, so the Play API has no package to
  * update. The replacement is a small client for the public release feed: one request
  * for the latest release, then a download that is only handed to the system installer
- * after three checks — the asset's SHA-256, the APK's package name and version code,
- * and the signing certificate against the installed app's. The OS enforces the last
+ * after three checks — the asset's SHA-256 when the release reports one, the APK's
+ * package name and version code, and the signing certificate against the installed
+ * app's. The OS enforces the last
  * one anyway, but doing it here is what turns a bad release into an error message
  * instead of a system dialog that ends in `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
  *
  * **The check is a GET with no credentials and no identifiers.** It reveals this
  * device's address to GitHub, which is the same thing any browser does; nothing about
  * the device, the book or the sessions is sent. GitHub's unauthenticated limit is 60
- * requests an hour, and the app asks at most once a day plus when the operator taps.
+ * requests an hour **per address**, and the app asks at most once a day plus when the
+ * operator taps — which is nothing until that address is shared, and a phone's often
+ * is: carrier NAT, a shared office network, a proxy that sells one exit to many. So
+ * when the API refuses with `403`, the same question is put to the release page,
+ * which is served from a tier that quota does not cover. See [UpdateFeed] for what is
+ * read there.
  *
  * The release is read from `releases/latest`, which excludes drafts and pre-releases;
  * the tag is compared as a dotted number, so `v0.2.0` is newer than `0.1.9` and
@@ -44,11 +51,35 @@ import java.security.MessageDigest
  */
 object Updates {
 
-	private const val RELEASE_API = "https://api.github.com/repos/OahzOb/dsh-tabs-android/releases/latest"
+	/** The structured channel: one request, and where a size and digest are fields. */
+	private const val RELEASE_API = "https://api.github.com/repos/$RELEASE_REPOSITORY/releases/latest"
+
+	/** The browser channel's first page, which answers with a redirect to the tag. */
+	private const val RELEASE_WEB = "https://github.com/$RELEASE_REPOSITORY/releases/latest"
+
+	/** The fragment the release page loads to list its files. */
+	private const val RELEASE_ASSETS = "https://github.com/$RELEASE_REPOSITORY/releases/expanded_assets/"
+
+	/** The feed that carries every release's notes. */
+	private const val RELEASE_FEED = "https://github.com/$RELEASE_REPOSITORY/releases.atom"
+
 	private const val USER_AGENT = "dsh-tabs-android-updater"
 	private const val CONNECT_TIMEOUT_MS = 15_000
 	private const val READ_TIMEOUT_MS = 30_000
+
+	/**
+	 * How long the notes may delay an offer that is already decided.
+	 *
+	 * The notes are the only part of the browser channel that is optional — they make
+	 * the dialog nicer to read and nothing else — so a feed that stalls must not hold
+	 * the update while a 30-second read timeout runs out.
+	 */
+	private const val NOTES_READ_TIMEOUT_MS = 8_000
+
 	private const val BUFFER_BYTES = 16 * 1024
+
+	/** What a `/releases/latest` request is allowed to answer before the page itself. */
+	private val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
 
 	/** One release that is newer than this build. */
 	data class Available(
@@ -85,55 +116,165 @@ object Updates {
 	/**
 	 * Ask GitHub for the latest release and compare it with this build.
 	 *
+	 * Two channels, one question. The API is asked first because it answers in one
+	 * request with fields — notes, size, digest — that the pages carry only as prose;
+	 * if it refuses, the release page is asked instead, because the refusal a phone
+	 * actually meets (`403` from a shared address's spent quota) is one the page does
+	 * not share. Only when both refuse is there a failure to report, and then both
+	 * reasons are reported: a `403` and a timeout together say which side of the
+	 * network broke.
+	 *
 	 * @returns the newer release, `Current`, or the reason it could not be decided.
 	 */
 	suspend fun check(): Check = withContext(Dispatchers.IO) {
+		val api = checkApi()
+		if (api !is Check.Failed) return@withContext api
+		val web = checkWeb()
+		if (web !is Check.Failed) {
+			// A check that had to fall back is not a healthy check: the fact goes into
+			// the shareable log, where a permanent API-channel regression will show up
+			// instead of hiding behind a fallback that keeps working.
+			Diag.log("update.check channel=web result=${web.summary()}")
+			return@withContext web
+		}
+		Diag.log("update.check channel=none result=failed")
+		Check.Failed("${api.reason}; ${web.reason}")
+	}
+
+	/** The result in three words, for one log line. */
+	private fun Check.summary(): String = when (this) {
+		is Check.Current -> "current"
+		is Check.Newer -> "newer-${update.version}"
+		is Check.Failed -> "failed"
+	}
+
+	/** One request to the release API, decoded. */
+	private fun checkApi(): Check {
 		var connection: HttpURLConnection? = null
 		try {
-			connection = (URL(RELEASE_API).openConnection() as HttpURLConnection).apply {
-				requestMethod = "GET"
-				setRequestProperty("User-Agent", "$USER_AGENT/${BuildConfig.VERSION_NAME}")
+			connection = open(RELEASE_API).apply {
 				setRequestProperty("Accept", "application/vnd.github+json")
-				connectTimeout = CONNECT_TIMEOUT_MS
-				readTimeout = READ_TIMEOUT_MS
-				instanceFollowRedirects = true
 			}
 			val status = connection.responseCode
-			if (status != HttpURLConnection.HTTP_OK) {
-				return@withContext Check.Failed("GitHub answered HTTP $status")
-			}
+			if (status != HttpURLConnection.HTTP_OK) return Check.Failed(apiRefusal(connection, status))
 			val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-			val release = JSONObject(body)
-			val version = release.optString("tag_name").removePrefix("v").trim()
-			if (version.isEmpty()) return@withContext Check.Failed("the release has no tag")
-			if (compareVersions(version, BuildConfig.VERSION_NAME) <= 0) return@withContext Check.Current
-			val assets = release.optJSONArray("assets") ?: return@withContext Check.Failed("the release has no assets")
-			var apk: JSONObject? = null
-			for (index in 0 until assets.length()) {
-				val asset = assets.optJSONObject(index) ?: continue
-				if (asset.optString("name").endsWith(".apk", ignoreCase = true)) {
-					apk = asset
-					break
-				}
-			}
-			val asset = apk ?: return@withContext Check.Failed("the release has no APK")
-			val url = asset.optString("browser_download_url")
-			if (url.isEmpty()) return@withContext Check.Failed("the APK has no download URL")
-			Check.Newer(
-				Available(
-					version = version,
-					notes = release.optString("body").trim(),
-					url = url,
-					sha256 = asset.optString("digest").removePrefix("sha256:").trim().ifEmpty { null },
-					size = asset.optLong("size", 0L)
-				)
-			)
+			return readRelease(body, BuildConfig.VERSION_NAME)
 		} catch (error: Exception) {
-			Check.Failed(error.message ?: error.javaClass.simpleName)
+			return Check.Failed("the release API could not be read (${error.message ?: error.javaClass.simpleName})")
 		} finally {
 			connection?.disconnect()
 		}
 	}
+
+	/** Why the API said no, with GitHub's own sentence and the quota's reset time. */
+	private fun apiRefusal(connection: HttpURLConnection, status: Int): String {
+		val body = try {
+			connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+		} catch (_: Exception) {
+			""
+		}
+		val message = try {
+			JSONObject(body).optString("message")
+		} catch (_: Exception) {
+			""
+		}
+		return describeApiFailure(
+			status = status,
+			message = message,
+			remaining = connection.getHeaderField("X-RateLimit-Remaining"),
+			reset = connection.getHeaderField("X-RateLimit-Reset")
+		)
+	}
+
+	/**
+	 * The same question asked of the release page, the way a browser asks it: where
+	 * `/releases/latest` redirects, then the asset list for that tag, then the feed
+	 * for its notes. None of those three spends the API's quota.
+	 */
+	private fun checkWeb(): Check {
+		var connection: HttpURLConnection? = null
+		try {
+			connection = open(RELEASE_WEB, followRedirects = false)
+			val status = connection.responseCode
+			val location = connection.getHeaderField("Location")
+			connection.disconnect()
+			connection = null
+			if (status !in REDIRECT_STATUSES) {
+				return Check.Failed("the release page answered HTTP $status instead of naming a tag")
+			}
+			val tag = releaseTag(location) ?: return Check.Failed("the release page named no tag")
+			val version = tag.removePrefix("v").trim()
+			if (version.isEmpty()) return Check.Failed("the release tag is empty")
+			if (compareVersions(version, BuildConfig.VERSION_NAME) <= 0) return Check.Current
+			val asset = releaseAsset(readPage(RELEASE_ASSETS + tag))
+				?: return Check.Failed("the release page named no APK")
+			return Check.Newer(
+				Available(
+					version = version,
+					notes = notesFor(tag).orEmpty(),
+					url = asset.url,
+					sha256 = asset.sha256,
+					// The page prints a rounded size at best. The download reports
+					// its own Content-Length through the progress callback, and only
+					// a server that omits that leaves the bar indeterminate.
+					size = 0L
+				)
+			)
+		} catch (error: Exception) {
+			return Check.Failed("the release page could not be read (${error.message ?: error.javaClass.simpleName})")
+		} finally {
+			connection?.disconnect()
+		}
+	}
+
+	/**
+	 * The feed's notes for one tag, or null: notes have never blocked an update.
+	 *
+	 * Its read timeout is shorter than the other requests' on purpose — see
+	 * [NOTES_READ_TIMEOUT_MS].
+	 */
+	private fun notesFor(tag: String): String? = try {
+		releaseNotes(readPage(RELEASE_FEED, NOTES_READ_TIMEOUT_MS), tag)
+	} catch (_: Exception) {
+		null
+	}
+
+	/**
+	 * One page, fetched and read, or the exception that stopped it.
+	 * @param url - where to ask.
+	 * @param readTimeoutMs - how long a stalled body may hold the caller.
+	 */
+	private fun readPage(url: String, readTimeoutMs: Int = READ_TIMEOUT_MS): String {
+		var connection: HttpURLConnection? = null
+		try {
+			connection = open(url, readTimeoutMs = readTimeoutMs)
+			val status = connection.responseCode
+			if (status != HttpURLConnection.HTTP_OK) throw IOException("HTTP $status")
+			return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+		} finally {
+			connection?.disconnect()
+		}
+	}
+
+	/**
+	 * A GET carrying the updater's identity and timeouts.
+	 * @param url - where to ask.
+	 * @param followRedirects - whether the caller wants the answer or the redirect.
+	 * @param readTimeoutMs - how long a stalled body may hold the caller.
+	 * @returns the connection, not yet opened.
+	 */
+	private fun open(
+		url: String,
+		followRedirects: Boolean = true,
+		readTimeoutMs: Int = READ_TIMEOUT_MS
+	): HttpURLConnection =
+		(URL(url).openConnection() as HttpURLConnection).apply {
+			requestMethod = "GET"
+			setRequestProperty("User-Agent", "$USER_AGENT/${BuildConfig.VERSION_NAME}")
+			connectTimeout = CONNECT_TIMEOUT_MS
+			readTimeout = readTimeoutMs
+			instanceFollowRedirects = followRedirects
+		}
 
 	/**
 	 * Download a release APK and verify it before it can be installed.
@@ -159,13 +300,7 @@ object Updates {
 		reusable(context, target)?.let { return@withContext it }
 		try {
 			if (target.exists()) target.delete()
-			connection = (URL(update.url).openConnection() as HttpURLConnection).apply {
-				requestMethod = "GET"
-				setRequestProperty("User-Agent", "$USER_AGENT/${BuildConfig.VERSION_NAME}")
-				connectTimeout = CONNECT_TIMEOUT_MS
-				readTimeout = READ_TIMEOUT_MS
-				instanceFollowRedirects = true
-			}
+			connection = open(update.url)
 			val status = connection.responseCode
 			if (status != HttpURLConnection.HTTP_OK) {
 				return@withContext Download.Failed("GitHub answered HTTP $status")

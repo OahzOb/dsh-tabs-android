@@ -31,7 +31,27 @@ data class Device(
 	 * format. Trust on first use, then pinning — see [HostKeys] for why JSch's own
 	 * `StrictHostKeyChecking` cannot be used for this.
 	 */
-	val hostKey: String? = null
+	val hostKey: String? = null,
+	/**
+	 * Whether this machine's Harness outlives the connection.
+	 *
+	 * Stored as `mode: "persistent"` rather than as this boolean, because the book is
+	 * shared with the desktop client and that is the field it writes. The unit is the
+	 * host, not a Session: every Session in that DSH home lives in the one process, so
+	 * one switch covers them all — and two Harnesses over one home cannot share a
+	 * Session's write lease.
+	 */
+	val persistent: Boolean = false,
+	/** The far side's DSH home, when not the default one for that account. */
+	val home: String? = null,
+	/**
+	 * The loopback port this client should forward for a persistent machine.
+	 *
+	 * A stable port is a stable **origin**, which is what keeps the WebView's cookie
+	 * and its stored "last Session" alive across a reconnect. Null asks the OS for a
+	 * free one, exactly as the ephemeral path does.
+	 */
+	val localPort: Int? = null
 ) {
 	/** What the tab bar shows. */
 	val display: String get() = label.ifBlank { host }
@@ -48,6 +68,23 @@ data class Device(
 				directory = directory?.takeIf { it.isNotBlank() }
 			)
 
+		/**
+		 * The loopback port a persistent device gets when the book does not name one.
+		 *
+		 * The same derivation the desktop client uses — 32-bit wrapping hash of the id,
+		 * 41000–41999 — so one book moved between the two clients lands on the same
+		 * origin instead of each side inventing a different one. The desktop's test pins
+		 * the numbers; `RemoteParityTest` pins that these agree with them.
+		 *
+		 * @param id the device id.
+		 * @return a port in 41000–41999.
+		 */
+		fun deriveLocalPort(id: String): Int {
+			var hash = 0u
+			for (character in id) hash = hash * 31u + character.code.toUInt()
+			return 41000 + (hash % 1000u).toInt()
+		}
+
 		fun fromJson(json: JSONObject): Device = Device(
 			id = json.optString("id").ifBlank { "dev-${UUID.randomUUID().toString().take(8)}" },
 			label = json.optString("label"),
@@ -60,7 +97,10 @@ data class Device(
 				"windows" -> Remote.Platform.WINDOWS
 				else -> null
 			},
-			hostKey = json.optString("hostKey").takeIf { it.isNotBlank() }
+			hostKey = json.optString("hostKey").takeIf { it.isNotBlank() },
+			persistent = json.optString("mode") == "persistent",
+			home = json.optString("home").takeIf { it.isNotBlank() },
+			localPort = json.optInt("localPort", 0).takeIf { it in 1..65535 }
 		)
 	}
 
@@ -74,6 +114,11 @@ data class Device(
 		directory?.let { put("directory", it) }
 		platform?.let { put("platform", if (it == Remote.Platform.POSIX) "posix" else "windows") }
 		hostKey?.let { put("hostKey", it) }
+		// The book's spelling of the switch, shared with the desktop client: a mode of
+		// "session" is the absence of the field, so an older build's file stays valid.
+		if (persistent) put("mode", "persistent")
+		home?.let { put("home", it) }
+		localPort?.let { put("localPort", it) }
 	}
 }
 

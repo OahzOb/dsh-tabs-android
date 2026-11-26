@@ -32,7 +32,8 @@ import java.time.format.DateTimeFormatter
  * to the newest ~32 KB. The events are the decision points: window create/destroy with
  * the flags that choose handover over teardown, session adopt/stop, connect start/
  * result, the exec channel ending, each automatic retry, the foreground service's life,
- * network availability, and the liveness probe. Nothing about the conversation, the
+ * network availability, the liveness probe, and the update check's channel when the API
+ * refuses and the release page carries it. Nothing about the conversation, the
  * session content or the device book is written — only that a connection did something
  * at a time — so the file is safe to share, which is the other half of the design: it
  * is only useful if it can leave the device, and the release build cannot be read with

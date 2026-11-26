@@ -52,43 +52,53 @@ class RemoteSession private constructor(
 	private val channel: ChannelExec,
 	/** The remote program's stdin. Held open for the whole life of the session. */
 	private val stdin: OutputStream,
-	/** The port JSch bound on loopback, chosen by the OS. */
+	/** The port JSch bound on loopback, chosen by the OS unless the device named one. */
 	val localPort: Int,
 	val remotePort: Int,
 	val token: String?,
 	val platform: Remote.Platform,
 	/** Everything the connect said, for the failure panel. */
-	val transcript: List<String>
+	val transcript: List<String>,
+	/** Whether the Harness behind this session outlives it. */
+	val persistent: Boolean = false,
+	/** Whether a persistent connect found a host that was already running. */
+	val adopted: Boolean = false,
+	/** The far side's DSH home, for the stop program a persistent session runs. */
+	private val home: String? = null
 ) {
 	/** The URL a WebView should open. */
 	val url: String get() = Remote.localUrl(localPort, token)
 
 	/**
-	 * Stop the remote server, then drop the connection.
+	 * Let go of the connection.
 	 *
-	 * The order is load-bearing and is the same one the desktop app uses: ending
-	 * stdin reaches EOF on the far side, which is what makes the remote `dsh web`
-	 * exit. Disconnecting first would drop the connection without the far side ever
-	 * learning it should stop, leaving an orphaned server holding the remote port.
+	 * For an ordinary session this stops the remote server first, and the order is
+	 * load-bearing: ending stdin reaches EOF on the far side, which is what makes the
+	 * remote `dsh web` exit. Disconnecting first would drop the connection without the
+	 * far side ever learning it should stop.
+	 *
+	 * **A persistent session has no such obligation**: its host is not this
+	 * connection's to end, so this only drops the forward and the SSH session, and the
+	 * Harness keeps running with every Session it holds. [terminate] is the one that
+	 * ends it, and only an operator action calls that.
 	 */
 	fun stop() {
 		watchJob?.cancel()
 		watchJob = null
-		try {
-			stdin.close()
-		} catch (_: Exception) {
-			/* the pipe may already be gone */
+		if (!persistent) {
+			try {
+				stdin.close()
+			} catch (_: Exception) {
+				/* the pipe may already be gone */
+			}
 		}
-		try {
-			@Suppress("DEPRECATION")
-			session.delPortForwardingL(localPort)
-		} catch (_: Exception) {
-			/* already gone */
-		}
-		try {
-			channel.disconnect()
-		} catch (_: Exception) {
-			/* already gone */
+		dropForward()
+		if (!persistent) {
+			try {
+				channel.disconnect()
+			} catch (_: Exception) {
+				/* already gone */
+			}
 		}
 		try {
 			session.disconnect()
@@ -97,8 +107,63 @@ class RemoteSession private constructor(
 		}
 	}
 
+	/**
+	 * End the Harness itself, and with it the connection.
+	 *
+	 * Only meaningful for a persistent session, and only ever reached from an explicit
+	 * "Stop host": the host may be serving another client — the desktop app, a second
+	 * phone — and the work it is doing belongs to somebody. An ordinary session's
+	 * `stop()` already does exactly this, so it is reused rather than duplicated.
+	 *
+	 * @returns the stop program's output, for the transcript.
+	 */
+	suspend fun terminate(): List<String> = withContext(Dispatchers.IO) {
+		if (!persistent) {
+			stop()
+			return@withContext emptyList()
+		}
+		val out = mutableListOf<String>()
+		watchJob?.cancel()
+		watchJob = null
+		dropForward()
+		try {
+			val exec = session.openChannel("exec") as ChannelExec
+			try {
+				exec.setCommand(Remote.remoteCommand(Remote.persistentStopProgram(home, platform), platform))
+				val stream = exec.inputStream
+				exec.connect(CONNECT_TIMEOUT_MS)
+				val text = readBounded(stream, CONNECT_TIMEOUT_MS.toLong())
+				out += text.split("\n").map { it.trimEnd('\r') }.filter { it.isNotBlank() }
+			} finally {
+				try {
+					exec.disconnect()
+				} catch (_: Exception) {
+					/* already gone */
+				}
+			}
+		} catch (error: Exception) {
+			out += "FAILED: ${error.message ?: error.javaClass.simpleName}"
+		}
+		try {
+			session.disconnect()
+		} catch (_: Exception) {
+			/* already gone */
+		}
+		out
+	}
+
+	/** Drop the loopback forward, if it is still installed. */
+	private fun dropForward() {
+		try {
+			@Suppress("DEPRECATION")
+			session.delPortForwardingL(localPort)
+		} catch (_: Exception) {
+			/* already gone */
+		}
+	}
+
 	/** True once the session is no longer usable. */
-	val isAlive: Boolean get() = session.isConnected && channel.isConnected
+	val isAlive: Boolean get() = session.isConnected && (persistent || channel.isConnected)
 
 	/**
 	 * Whether the far side still answers on this session's forwarded port.
@@ -152,7 +217,13 @@ class RemoteSession private constructor(
 	}
 
 	/** What the remote program reported when it exited, or -1 while it is still running. */
-	val exitStatus: Int get() = if (channel.isClosed) channel.exitStatus else -1
+	val exitStatus: Int get() = when {
+		// A persistent session's ensure channel is finished before the session is
+		// handed over, so its exit status says nothing about the Harness.
+		persistent -> -1
+		channel.isClosed -> channel.exitStatus
+		else -> -1
+	}
 
 	/**
 	 * Watch the remote program, and report when it ends.
@@ -174,6 +245,10 @@ class RemoteSession private constructor(
 	 * @param onEnded called with the exit status, on the main dispatcher.
 	 */
 	fun watchUntilEnded(intervalMs: Long = 4_000, onEnded: (Int) -> Unit) {
+		// A persistent host has no exec channel to watch: the ensure program finished
+		// before the session was handed over, and the Harness it left is deliberately
+		// not this connection's. Liveness for those is `responds()`.
+		if (persistent) return
 		watchJob = CoroutineScope(Dispatchers.IO).launch {
 			while (isActive) {
 				delay(intervalMs)
@@ -235,6 +310,83 @@ class RemoteSession private constructor(
 			} finally {
 				if (!delivered) opened.release()
 			}
+		}
+
+		/**
+		 * Stop a machine's recorded persistent host over a connection of its own.
+		 *
+		 * **This is the ordinary Stop host path, not the exceptional one.** Closing a
+		 * persistent tab lets go of the host, so by the time the operator asks for
+		 * Stop host there is usually no session left to reuse — the host is the only
+		 * thing still running. Running the stop program therefore needs its own short
+		 * connection: connect, run `persistentStopProgram`, read what it says, hang up.
+		 *
+		 * There is no `RemoteSession` here on purpose. A handle owns a remote program
+		 * and a forward; this owns neither, and returning one would invite a caller to
+		 * stop something that has already stopped.
+		 *
+		 * @param device the machine whose host is being stopped.
+		 * @param credential what to authenticate with.
+		 * @param onLine receives each line the stop program prints.
+		 * @return the stop program's output; a failure is reported as one line.
+		 */
+		suspend fun stopHost(
+			device: Device,
+			credential: Credential,
+			onLine: (String) -> Unit = {}
+		): List<String> = withContext(Dispatchers.IO) {
+			val out = mutableListOf<String>()
+			val line: (String) -> Unit = { text ->
+				out += text
+				onLine(text)
+			}
+			var session: Session? = null
+			try {
+				val jsch = JSch()
+				if (credential is Credential.PrivateKey) {
+					jsch.addIdentity("dsh-tabs", credential.pem, null, credential.passphrase?.toByteArray(Charsets.UTF_8))
+				}
+				val connected = jsch.getSession(device.user, device.host, device.sshPort).apply {
+					hostKeyRepository = TrustOnFirstUse(device.hostKey, {})
+					setConfig(Properties().apply {
+						put("StrictHostKeyChecking", "yes")
+						put(
+							"PreferredAuthentications",
+							if (credential is Credential.Password) "password,keyboard-interactive,publickey" else "publickey"
+						)
+						put("ServerAliveInterval", "20000")
+						put("ServerAliveCountMax", "3")
+					})
+					if (credential is Credential.Password) setPassword(credential.secret)
+					connect(CONNECT_TIMEOUT_MS)
+					timeout = 0
+				}
+				session = connected
+				val platform = device.platform ?: runProbe(connected)
+				val exec = connected.openChannel("exec") as ChannelExec
+				try {
+					exec.setCommand(Remote.remoteCommand(Remote.persistentStopProgram(device.home, platform), platform))
+					val stream = exec.inputStream
+					exec.connect(CONNECT_TIMEOUT_MS)
+					val text = readBounded(stream, CONNECT_TIMEOUT_MS.toLong())
+					text.split("\n").map { it.trimEnd('\r') }.filter { it.isNotBlank() }.forEach(line)
+				} finally {
+					try {
+						exec.disconnect()
+					} catch (_: Exception) {
+						/* already gone */
+					}
+				}
+			} catch (error: Exception) {
+				line("FAILED: ${error.message ?: error.javaClass.simpleName}")
+			} finally {
+				try {
+					session?.disconnect()
+				} catch (_: Exception) {
+					/* already gone */
+				}
+			}
+			out
 		}
 
 		/**
@@ -352,11 +504,22 @@ class RemoteSession private constructor(
 						return@withContext fail(problem, session, channel, lines)
 					}
 
+					val persistent = device.persistent && commandOverride == null
 					val exec = connected.openChannel("exec") as ChannelExec
 					channel = exec
 					opened.channel(exec)
 					exec.setCommand(
-						commandOverride ?: Remote.remoteCommand(Remote.remoteProgram(device.directory, platform), platform)
+						commandOverride
+							?: if (persistent) {
+								// One-shot: adopt the recorded host or start one that outlives
+								// this channel. The program exits after printing its URL.
+								Remote.remoteCommand(
+									Remote.persistentEnsureProgram(device.directory, device.home, platform),
+									platform
+								)
+							} else {
+								Remote.remoteCommand(Remote.remoteProgram(device.directory, platform), platform)
+							}
 					)
 					// stdout has to be asked for before connect(), or JSch hands back a
 					// stream that never carries the readiness line.
@@ -373,10 +536,31 @@ class RemoteSession private constructor(
 					if (parsed.port <= 0) return@withContext fail("the readiness line had no port: $url", session, channel, lines)
 					note("dsh web: http://127.0.0.1:${parsed.port}/")
 
+					// **A persistent connect must not hold the ensure channel.** Its work is
+					// done once the URL is printed; the Harness behind it is detached. On a
+					// real Linux host whose login profile leaves a background process holding
+					// the session's stdout, the channel never closes on its own — measured,
+					// even `ssh host 'echo hi'` does not return — so waiting would hang the
+					// connect for ever first and leak a channel afterwards.
+					if (persistent) {
+						try {
+							sink.close()
+						} catch (_: Exception) {
+							/* the pipe may already be gone */
+						}
+						try {
+							exec.disconnect()
+						} catch (_: Exception) {
+							/* already gone */
+						}
+					}
+
 					// Port 0 asks the OS for a free one and returns it, which is exactly what
 					// `ssh -L` does — the desktop app has to allocate its own port and hope
-					// nothing takes it in the gap.
-					val bound = connected.setPortForwardingL(0, "127.0.0.1", parsed.port)
+					// nothing takes it in the gap. A persistent device may name one instead:
+					// a stable port is a stable origin, and the WebView's cookie and stored
+					// Session are keyed by it.
+					val bound = connected.setPortForwardingL(device.localPort ?: 0, "127.0.0.1", parsed.port)
 					note("tunnel 127.0.0.1:$bound -> 127.0.0.1:${parsed.port}")
 
 					// Latch the key before tearing the repository down, and hand it over
@@ -391,7 +575,10 @@ class RemoteSession private constructor(
 						remotePort = parsed.port,
 						token = parsed.token,
 						platform = platform,
-						transcript = synchronized(lines) { lines.toList() }
+						transcript = synchronized(lines) { lines.toList() },
+						persistent = persistent,
+						adopted = ready.adopted,
+						home = device.home
 					)
 					opened.remote(handle)
 					SessionStart.Ok(handle)
@@ -482,6 +669,8 @@ class RemoteSession private constructor(
 			val done = AtomicBoolean(false)
 			val result = CompletableFuture<Ready>()
 			val raw = StringBuilder()
+			// Set when the ensure program says it found a host instead of starting one.
+			val hostAdopted = AtomicBoolean(false)
 			// Kept apart from `raw`, which exists to be searched for the readiness line.
 			// This is what a failure quotes back to the operator: measured against a
 			// real Windows host, the far side said `Set-Location : Cannot find path …`
@@ -507,18 +696,28 @@ class RemoteSession private constructor(
 							val chunk = String(buffer, 0, read, Charsets.UTF_8)
 							chunk.split("\n").forEach { line ->
 								if (line.isNotBlank()) note(prefix + line.trimEnd('\r'))
+								// The persistent programs answer the same question with one
+								// extra case: `HOST adopted …` or `HOST error …` on stdout,
+								// before the readiness line. Parsed rather than matched here so
+								// one client's spelling is not guessed by the other.
+								Remote.HostLine.parse(line)?.let { host ->
+									if (host.adopted) hostAdopted.set(true)
+								}
+								Remote.HostLine.errorOf(line)?.let { said -> finish(Ready(error = said)) }
 							}
 							synchronized(raw) {
 								raw.append(chunk)
 								if (prefix.isNotEmpty()) errors.append(chunk)
-								Remote.readyUrl(raw.toString())?.let { finish(Ready(url = it)) }
+								Remote.readyUrl(raw.toString())?.let { finish(Ready(url = it, adopted = hostAdopted.get())) }
 							}
 						}
 						// Printing has stopped, so a URL without its trailing newline is as
 						// complete as it will ever be — and if there is none, what the far
 						// side said is the whole answer.
 						synchronized(raw) {
-							Remote.readyUrl(raw.toString(), partialToo = true)?.let { finish(Ready(url = it)) }
+							Remote.readyUrl(raw.toString(), partialToo = true)?.let {
+								finish(Ready(url = it, adopted = hostAdopted.get()))
+							}
 							val said = Remote.readableStderr(errors.toString())
 							finish(
 								Ready(
@@ -547,7 +746,34 @@ class RemoteSession private constructor(
 			}
 		}
 
-		private data class Ready(val url: String? = null, val error: String? = null)
+		private data class Ready(val url: String? = null, val error: String? = null, val adopted: Boolean = false)
+
+		/**
+		 * Read a stream with a deadline.
+		 *
+		 * Used by the stop program, whose output ends when it does — but whose channel,
+		 * on a host with a chatty login profile, need not close. A bounded read keeps a
+		 * stop that has already worked from hanging the caller that wanted to report it.
+		 *
+		 * @param stream the channel's stdout.
+		 * @param timeoutMs the whole budget, matching the connect's.
+		 * @return everything that arrived before the deadline.
+		 */
+		private fun readBounded(stream: InputStream, timeoutMs: Long): String {
+			val future = CompletableFuture<ByteArray>()
+			thread(isDaemon = true, name = "dsh-host") {
+				try {
+					future.complete(stream.readBytes())
+				} catch (error: Exception) {
+					future.completeExceptionally(error)
+				}
+			}
+			return try {
+				String(future.get(timeoutMs, TimeUnit.MILLISECONDS), Charsets.UTF_8)
+			} catch (_: Exception) {
+				""
+			}
+		}
 	}
 }
 

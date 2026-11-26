@@ -46,6 +46,7 @@ redirect, so every later reload uses the cookie rather than the URL.
 | **Host keys are pinned** | Trust on first use, then verified on every later connect. A changed host key is refused, and you are told, rather than silently accepted. |
 | **Teardown that reaps** | Closing a tab stops the remote `dsh web` on the far side instead of leaving it holding the machine's resources. |
 | **Survives leaving the app** | A foreground service keeps the connection alive while you are in another app. |
+| **A host that outlives the connection** | Tick **Persistent host** on a machine and its Harness keeps running when the tab closes, the app is killed or the network drops — the next connection adopts that same process instead of starting a second one, so every Session in that DSH home is the one you left. **Stop host** in the machine's dialog is the only control that ends it. |
 | **Survives a window resize** | Split screen, freeform and a folding device resize the window in place; if an OEM recreates the window instead, the new window adopts the live session — the page reloads, the connection does not drop. |
 | **Automatic reconnect** | If the remote server goes away — a plugin edit restarts it, for instance — the tab says so and reconnects on its own, within a bounded number of attempts. |
 | **A readable failure** | A connect that fails shows the far side's own words, not just "connection failed". |
@@ -91,8 +92,9 @@ do if you intend to keep it. See "Building" and "Signing" below.
 
 Versions from `0.2.0` check GitHub Releases once a day at launch, and the sync control
 in the tab bar checks immediately. A newer release is offered with its notes; the APK
-is downloaded only when **Download** is tapped, its SHA-256 and signing certificate are
-checked against this install, and Android's own installer asks for confirmation.
+is downloaded only when **Download** is tapped, its SHA-256 (when the release reports
+one) and signing certificate are checked against this install, and Android's own
+installer asks for confirmation.
 
 **A downloaded APK is kept until it is installed**, and the offer knows it: a release
 that was downloaded and then dismissed at the installer is offered again as
@@ -102,13 +104,41 @@ check says this build is already the latest, so the cache holds at most the one 
 being offered. Dismissing the installer once used to cost the whole 18 MB again on the
 next check; from `0.2.4` it does not.
 
-The check is a plain unauthenticated GET to GitHub's public release API. It sends no
-device, book or session data; what is downloaded is trusted through GitHub over HTTPS
-and the APK's signature, which is the same key that signed the installed app. Android
-still shows its own "install unknown apps" permission the first time.
+The check is a plain unauthenticated GET to GitHub's public release API — and, when
+that is refused, to the release page itself. Neither sends device, book or session
+data; what is downloaded is trusted through GitHub over HTTPS and the APK's signature,
+which is the same key that signed the installed app. Android still shows its own
+"install unknown apps" permission the first time.
+
+**The API's unauthenticated quota is 60 requests an hour per network address**, and an
+address is not a phone: everything behind the same carrier NAT, office NAT or shared
+proxy spends it together. A `403` there is a spent quota, not an outage, and a check
+that stops at it reports "GitHub answered HTTP 403" with no way to tell the operator
+which of the two it was. From `0.2.6` the updater asks the release page instead: where
+`/releases/latest` redirects names the tag, the release page's asset list names the APK
+and its SHA-256, and the releases feed carries the notes — none of the three spend the
+API's quota. Only when both channels fail does it report a failure, and then it reports
+both answers, because a `403` and a timeout together say which side of the network
+broke.
 
 **The first update has to be installed by hand** if the version already on the phone
 predates `0.2.0`: that build is the one without the updater.
+
+### The 403 that was a quota, not an outage
+
+On 2026-11-26 the tablet's check answered exactly `GitHub answered HTTP 403`. A `403`
+from that API is, in practice, the unauthenticated quota **spent** — 60 requests an
+hour per network address — and the address a phone sits behind is usually shared:
+carrier NAT, a proxy exit sold to many, an office network. The app had one channel, so
+it had nothing to add and nothing to fall back on, and the operator could not tell a
+spent quota from GitHub being down.
+
+The second channel was measured the same day, on the build machine through the local
+proxy: the redirect named `v0.2.5`, the asset fragment's `sha256` equalled the API's
+for the same release, and the feed returned its 7,597 characters of notes. The failure
+text now carries GitHub's own sentence — including the address it saw — and, when the
+quota is the cause, the time it resets. When both channels fail it carries both
+answers, because a `403` and a timeout together say which side of the network broke.
 
 ## Using it
 
@@ -230,19 +260,38 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 ### 更新
 
 从 `0.2.0` 起，应用启动时每天最多检查一次 GitHub Releases，标签栏里的同步按钮则立即检查。
-发现新版本会先给出说明；只有点 **Download** 才会下载，下载后用 SHA-256 和签名证书与已安装
-版本比对，再交给 Android 系统安装器让用户确认。
+发现新版本会先给出说明；只有点 **Download** 才会下载，下载后用 SHA-256（发布里报了才校验）
+和签名证书与已安装版本比对，再交给 Android 系统安装器让用户确认。
 
 **下载好的 APK 会一直留着，直到它被安装**，而且检查时知道这件事：已经下载、但在安装器里被
 取消的版本，下次会直接作为 **Install** 提供 —— 只会重新校验签名，不会再下载一遍。它会在
 新的下载取代它、或者检查发现当前已是最新时被删除，所以缓存里最多只有正在被提供的这一个版本。
 以前取消一次安装器，下次检查就要再花一次 18 MB；`0.2.4` 起不会了。
 
-检查是一次不带凭据的 GitHub 公共 Release API GET，不发送设备、设备簿或会话数据；下载内容
-的信任来自 GitHub HTTPS 加 APK 签名，也就是给已安装版本签名的那把密钥。Android 仍会在第一次
-安装时弹出"安装未知应用"的授权。
+检查是一次不带凭据的 GitHub 公共 Release API GET；被拒绝时改问发布页本身。两者都不发送
+设备、设备簿或会话数据；下载内容的信任来自 GitHub HTTPS 加 APK 签名，也就是给已安装版本
+签名的那把密钥。Android 仍会在第一次安装时弹出"安装未知应用"的授权。
+
+**API 的未认证配额是每小时每个网络地址 60 次**，而"地址"不是手机：同一个运营商 NAT、办公室
+NAT 或共享代理后面的所有人一起花这个数字。那里的 `403` 是配额用尽，不是服务故障；而停在
+`403` 上的检查只会报"GitHub answered HTTP 403"，操作者无从分辨是哪一种。从 `0.2.6` 起，
+更新器改问发布页：`/releases/latest` 跳转到的地址给出标签，发布页的文件列表给出 APK 及其
+SHA-256，releases feed 给出更新说明 —— 这三者都不花 API 的配额。只有两条路都失败才算失败，
+而且会把两边的回答都报出来：一个 `403` 加一个超时，正好说明断在网络哪一侧。
 
 **如果手机上已有的版本早于 `0.2.0`，第一次仍然要手动安装** —— 那个版本本身还没有更新器。
+
+### 那次 403 是配额，不是故障
+
+2026-11-26 平板的检查报的正是 `GitHub answered HTTP 403`。那个 API 的 `403` 实际上就是
+未认证配额**用尽** —— 每小时每个网络地址 60 次 —— 而手机所在的地址通常是共享的：运营商
+NAT、卖给很多人的代理出口、办公室网络。应用只有一条路，于是既没有第二句话可说，也没有
+第二条路可走，操作者分辨不出"配额用尽"和"GitHub 挂了"。
+
+第二条路当天就量过了，在构建机上通过本地代理：跳转给出 `v0.2.5`，文件列表里的 `sha256`
+与 API 对同一版本给出的一致，feed 返回了它那 7,597 个字符的说明。现在错误信息带上 GitHub
+自己的那句话 —— 包括它看到的地址 —— 以及配额是原因时的重置时间。两条路都失败时两条回答
+都会带上：一个 `403` 加一个超时，正好说明断在网络哪一侧。
 
 ## 用法
 
@@ -333,6 +382,46 @@ backgrounded server is always reaped:
 **This is why `RemoteSession.stop()` closes stdin first** and only then drops the
 forward, the channel and the session. Closing the connection first would leave
 the far side holding the port with nobody to tell it otherwise.
+
+### Persistent hosts: the one mode that does not reap
+
+Everything above is built around reaping: close the tab, end the far side's
+Harness. A machine marked **Persistent host** is the deliberate exception, and
+its contract lives in the same place as the desktop client's —
+`dsh-tabs/docs/contract.json`, block `persistent`.
+
+**The unit is the host, not a Session.** Everything in one DSH home lives in one
+`dsh web` process, so one switch makes every Session in that home persistent;
+there is no per-Session granularity that could mean anything, and two Harnesses
+over one home cannot share a Session's write lease.
+
+**Adoption, not takeover.** `Remote.persistentEnsureProgram` either prints the
+URL of a host already recorded in `~/.dsh/dsh-tabs/host.json` (adopted) or starts
+one detached and records it. Adoption is checked against three facts — the pid is
+alive, `ps`/CIM still says it is a Harness, and the port accepts a connection —
+because a pid is recycled and a port can belong to something else. The Session
+lease itself is never stolen: DSH gives it no expiry on purpose.
+
+**The channel is not the host's lifetime, and that is a measured rule here too.**
+The ensure program is a one-shot command: the client reads the readiness line and
+then closes the channel itself. On a real Linux host whose login profile leaves a
+background process holding the session's stdout, the channel *never* closes —
+`ssh host 'echo hi'` does not return either — so waiting for it would hang every
+connect. That is the same reason the desktop client kills its ssh client once the
+URL is in hand.
+
+**Closing means letting go.** `RemoteSession.stop()` still closes stdin for an
+ordinary session; for a persistent one it drops only the forward and the session,
+and the Harness keeps running. `RemoteSession.terminate()` runs
+`Remote.persistentStopProgram` — kill the recorded pid, remove the record — and
+only the **Stop host** button calls it.
+
+**The programs are byte-identical to the desktop's**, and `RemoteParityTest`
+compares all five against the contract. A hand-escaped 6 KB PowerShell string is
+where transcription errors hide, so `Remote.kt` keeps them as raw strings with
+the dollar sign written as a section sign and two markers (`@@HOME@@`,
+`@@ENTER@@`) substituted at use time; the lines are flush-left because their
+leading spaces and tabs are part of what runs.
 
 ### The forward is the library's, not ours
 
@@ -996,6 +1085,7 @@ decision point and trimmed to the newest ~32 KB:
 | `channel.ended code=…` | The exec channel ending — the one clean signal of a far side that went away |
 | `reconnect.attempt n=…` / `reconnect.exhausted` | Every automatic retry, with the reason it was started |
 | `probe.start` / `probe.done alive=…` | The liveness check below, and its answer |
+| `update.check channel=web` / `channel=none` | Whether the updater's API channel is still answering, or the release page is carrying the check |
 | `session.adopt` / `session.handover` / `session.stop` / `service.*` | Which of the four things ended the connection: the operator, a handover, a task removal, or the service |
 
 It carries no conversation, no session content and no device book — only that a

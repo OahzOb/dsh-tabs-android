@@ -59,6 +59,7 @@
 	<string name="update_checking">Checking for updates…</string>
 	<string name="update_current">This is the latest version.</string>
 	<string name="update_failed">Update check failed: %1$s</string>
+	<string name="update_check_failed_title">Update check failed</string>
 	<string name="update_failed_title">Update failed</string>
 	<string name="update_available">Version %1$s is available</string>
 	<string name="update_no_notes">No release notes were provided.</string>
@@ -77,4 +78,13 @@
 	<string name="diag_share">Share connection log</string>
 	<string name="diag_subject">dsh-tabs %1$s diagnostics</string>
 	<string name="diag_failed">Could not share the log: %1$s</string>
+
+	<!-- persistent hosts: the one switch that makes a machine's Sessions outlive the connection -->
+	<string name="field_persistent">Persistent host</string>
+	<string name="persistent_hint">Keep this machine’s Harness running when the tab closes or the network drops. Every Session in that DSH home stays open — the Harness is one process per home — and Stop host is the only control that ends it.</string>
+	<string name="field_home">DSH home (optional, e.g. /home/me/.dsh)</string>
+	<string name="stop_host">Stop host</string>
+	<string name="host_stopped">Host stopped.</string>
+	<string name="host_stop_failed">Could not stop the host: %1$s</string>
+	<string name="persistent_marker">·P</string>
 </resources>

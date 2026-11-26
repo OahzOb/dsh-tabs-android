@@ -52,6 +52,37 @@
 			android:importantForAutofill="no"
 			android:inputType="text" />
 
+		<CheckBox
+			android:id="@+id/persistent"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
+			android:text="@string/field_persistent" />
+
+		<TextView
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginBottom="6dp"
+			android:text="@string/persistent_hint"
+			android:textColor="@color/dim"
+			android:textSize="11sp" />
+
+		<EditText
+			android:id="@+id/home"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:hint="@string/field_home"
+			android:importantForAutofill="no"
+			android:inputType="text" />
+
+		<Button
+			android:id="@+id/stopHost"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="10dp"
+			android:text="@string/stop_host"
+			android:visibility="gone" />
+
 		<EditText
 			android:id="@+id/password"
 			android:layout_width="match_parent"

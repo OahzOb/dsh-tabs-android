@@ -471,6 +471,281 @@ object Remote {
 	 */
 	fun localUrl(localPort: Int, token: String?): String =
 		"http://127.0.0.1:$localPort/" + (if (token == null) "" else "?token=$token")
+	// ---- persistent hosts --------------------------------------------------
+	//
+	// The programs below are a **port** of dsh-tabs/src/remote.js's persistent branch,
+	// and their bytes are pinned by RemoteParityTest against
+	// dsh-tabs/docs/contract.json. Read the desktop copy for why each line is there;
+	// this side exists because the mode is worthless if one client starts a second
+	// Harness on a home where the other already has one.
+	//
+	// **The templates are raw strings with two substitutions, and they are
+	// flush-left on purpose.** Kotlin interpolates dollar signs, so every one in the
+	// PowerShell and the shell is written as a section sign and turned back at use
+	// time: escaping a hundred of them would bury the program. The lines cannot be
+	// re-indented either — their leading tabs and spaces are part of what the far
+	// side runs.
+	//
+	// @@HOME@@ is the DSH-home prologue (empty, or an export/assignment fragment) and
+	// @@ENTER@@ is the directory prologue (empty, or cd/Set-Location).
+
+	/** The directory, inside the far side's DSH home, that holds the host record. */
+	const val HOST_DIR = "dsh-tabs"
+
+	/** The record one persistent host leaves for the next connection. */
+	const val HOST_RECORD_FILE = "host.json"
+
+	/** The log the detached Harness writes; the readiness line is read from it. */
+	const val HOST_LOG_FILE = "host.log"
+
+	/** The generated launcher a Windows host is started through. */
+	const val HOST_LAUNCHER_FILE = "start-host.cmd"
+
+	/** Serialisation version of the record, so a client can refuse a future one. */
+	const val HOST_RECORD_VERSION = 1
+
+	/** How long a detached Harness may take to announce its URL. */
+	const val HOST_START_TIMEOUT_MS = 60_000L
+
+	/** How long one connection may wait for another connection's ensure. */
+	const val HOST_LOCK_WAIT_MS = 30_000L
+
+	/** How many 300 ms tries one connection makes for another connection's lock. */
+	private const val HOST_LOCK_TRIES = 100
+
+	/** How many 500 ms reads of the log a first start makes before giving up. */
+	private const val HOST_START_TRIES = 120
+
+	private val POSIX_ENSURE = """command -v dsh >/dev/null 2>&1 || { [ -s "§HOME/.nvm/nvm.sh" ] && . "§HOME/.nvm/nvm.sh" >/dev/null 2>&1; true; }; command -v dsh >/dev/null 2>&1 || { for d in "§HOME"/.nvm/versions/node/*/bin "§HOME/.local/bin" /usr/local/bin; do [ -x "§d/dsh" ] && PATH="§d:§PATH" && break; done; true; }; @@HOME@@@@ENTER@@home="§{DSH_HOME:-§HOME/.dsh}"; hd="§home/dsh-tabs"; mkdir -p "§hd" || exit 1; rec="§hd/host.json"; log="§hd/host.log"; lock="§hd/ensure.lock"; i=0
+while ! mkdir "§lock" 2>/dev/null; do
+	sleep 0.3
+	i=§((i+1))
+	if [ "§i" -gt 100 ]; then
+		if [ -d "§lock" ] && [ -n "§(find "§lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then rm -rf "§lock"; continue; fi
+		echo "HOST error another connection is starting this host and did not finish"
+		exit 1
+	fi
+done
+trap 'rmdir "§lock" 2>/dev/null' EXIT; pid=§(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "§rec" 2>/dev/null | head -n 1); port=§(sed -n 's/.*"port":\([0-9][0-9]*\).*/\1/p' "§rec" 2>/dev/null | head -n 1); token=§(sed -n 's/.*"token":"\([A-Za-z0-9_-]*\)".*/\1/p' "§rec" 2>/dev/null | head -n 1); started=§(sed -n 's/.*"started":"\([^"]*\)".*/\1/p' "§rec" 2>/dev/null | head -n 1); if [ -n "§pid" ] && [ -n "§port" ] && kill -0 "§pid" 2>/dev/null && ps -p "§pid" -o command= 2>/dev/null | grep -q " web " && (exec 3<>/dev/tcp/127.0.0.1/"§port") 2>/dev/null; then
+	echo "HOST adopted pid=§pid port=§port token=§token started=§started"
+	echo "dsh web: http://127.0.0.1:§port/?token=§token"
+	exit 0
+fi; rm -f "§rec"; : > "§log"; nohup dsh web --no-open --port 0 >>"§log" 2>&1 </dev/null & pid=§!; line=""
+for i in {1..120}; do
+	line=§(sed -n "s/^dsh web: //p" "§log" | tail -n 1)
+	[ -n "§line" ] && break
+	kill -0 "§pid" 2>/dev/null || break
+	sleep 0.5
+done; if [ -z "§line" ]; then
+	echo "HOST error the Harness did not announce a URL within 60s"
+	sed -n "1,20p" "§log"
+	exit 1
+fi; port=§(printf '%s' "§line" | sed -n 's#.*://[^/]*:\([0-9][0-9]*\)/.*#\1#p')
+token=§(printf '%s' "§line" | sed -n 's#.*[?&]token=\([A-Za-z0-9_-]*\).*#\1#p')
+if [ -z "§port" ] || [ -z "§token" ]; then
+	echo "HOST error the readiness line carried no port or token"
+	exit 1
+fi; started=§(date -u +%Y-%m-%dT%H:%M:%SZ); printf '{"version":1,"pid":%s,"port":%s,"token":"%s","started":"%s"}\n' "§pid" "§port" "§token" "§started" > "§rec.tmp" && mv "§rec.tmp" "§rec" && chmod 600 "§rec" 2>/dev/null; echo "HOST started pid=§pid port=§port token=§token started=§started"; echo "dsh web: §line"""".replace('§', '$')
+
+	private val WINDOWS_ENSURE = """§ErrorActionPreference = 'Stop'
+@@HOME@@§dsh = §null
+§c = Get-Command dsh -CommandType Application -ErrorAction SilentlyContinue
+if (§null -ne §c) { §dsh = @(§c)[0].Source }
+if ([string]::IsNullOrEmpty(§dsh)) { foreach (§p in @("§env:APPDATA\npm\dsh.cmd", "§env:PNPM_HOME\dsh.cmd", "§env:LOCALAPPDATA\pnpm\bin\dsh.cmd", "§env:ProgramFiles\nodejs\dsh.cmd")) { if (Test-Path -LiteralPath §p) { §dsh = §p; break } } }
+§candidates = @(§dsh) + @("§env:APPDATA\npm\dsh.cmd", "§env:PNPM_HOME\dsh.cmd", "§env:LOCALAPPDATA\pnpm\bin\dsh.cmd", "§env:ProgramFiles\nodejs\dsh.cmd")
+§binJs = §null; §shimDir = §null; §dsh = §null
+foreach (§candidate in §candidates) { if ([string]::IsNullOrEmpty(§candidate)) { continue }; §dir = Split-Path -Parent §candidate; §bin = Join-Path §dir 'node_modules\@deepseek-ai\dsh\lib\bin.js'; if (Test-Path -LiteralPath §bin) { §dsh = §candidate; §shimDir = §dir; §binJs = §bin; break } }
+if ([string]::IsNullOrEmpty(§binJs)) { Write-Output 'HOST error no launchable dsh on this Windows host'; exit 1 }
+§node = §null
+§cand = @((Join-Path §shimDir 'node.exe'), (Join-Path §env:ProgramFiles 'nodejs\node.exe'), 'node')
+foreach (§n in §cand) { if (§null -eq §node) { try { if (Get-Command §n -ErrorAction Stop) { §node = §n } } catch { } } }
+if (§null -eq §node) { Write-Output 'HOST error no node.exe on this Windows host'; exit 1 }
+@@ENTER@@§dshHome = if (§env:DSH_HOME) { §env:DSH_HOME } else { Join-Path §env:USERPROFILE '.dsh' }
+§hd = Join-Path §dshHome 'dsh-tabs'
+New-Item -ItemType Directory -Force -Path §hd | Out-Null
+§rec = Join-Path §hd 'host.json'
+§log = Join-Path §hd 'host.log'
+§lock = Join-Path §hd 'ensure.lock'
+§locked = §false
+§sw = [Diagnostics.Stopwatch]::StartNew()
+while (-not §locked) {
+  try { New-Item -ItemType Directory -Path §lock -ErrorAction Stop | Out-Null; §locked = §true; break } catch { }
+  if ((Test-Path -LiteralPath §lock) -and ((Get-Date) - (Get-Item -LiteralPath §lock).LastWriteTime).TotalSeconds -gt 120) { Remove-Item -LiteralPath §lock -Recurse -Force -ErrorAction SilentlyContinue; continue }
+  if (§sw.Elapsed.TotalMilliseconds -gt 30000) { break }
+  Start-Sleep -Milliseconds 300
+}
+if (-not §locked) { Write-Output 'HOST error another connection is starting this host and did not finish'; exit 1 }
+try {
+  §record = §null
+  if (Test-Path -LiteralPath §rec) { try { §record = Get-Content -LiteralPath §rec -Raw | ConvertFrom-Json } catch { §record = §null } }
+  if (§null -ne §record -and §null -ne §record.pid -and §null -ne §record.port) {
+    §live = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]§record.pid) -ErrorAction SilentlyContinue
+    §listening = §false
+    if (§null -ne §live) {
+      §tcp = §null
+      try { §tcp = [Net.Sockets.TcpClient]::new(); §listening = §tcp.ConnectAsync('127.0.0.1', [int]§record.port).Wait(2000) } catch { §listening = §false } finally { if (§null -ne §tcp) { §tcp.Dispose() } }
+    }
+    if (§null -ne §live -and §live.Name -eq 'node.exe' -and -not [string]::IsNullOrEmpty(§live.CommandLine) -and §live.CommandLine.Contains(' web ') -and §listening) {
+      Write-Output ('HOST adopted pid=' + §record.pid + ' port=' + §record.port + ' token=' + §record.token + ' started=' + §record.started)
+      Write-Output ('dsh web: http://127.0.0.1:' + §record.port + '/?token=' + §record.token)
+      exit 0
+    }
+  }
+  Remove-Item -LiteralPath §rec -Force -ErrorAction SilentlyContinue
+  Set-Content -LiteralPath §log -Value '' -Encoding ASCII
+  §launcher = Join-Path §hd 'start-host.cmd'
+  §lines = @('@echo off', ('set "DSH_HOME=' + §dshHome + '"'), ('"' + §node + '" "' + §binJs + '" web --no-open --port 0 > "' + §log + '" 2>&1'))
+  Set-Content -LiteralPath §launcher -Value §lines -Encoding ASCII
+  §created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('cmd.exe /c "' + §launcher + '"'); CurrentDirectory = (Get-Location).Path }
+  if (§created.ReturnValue -ne 0) { Write-Output ('HOST error WMI create failed rc=' + §created.ReturnValue); exit 1 }
+  §line = §null
+  §wait = [Diagnostics.Stopwatch]::StartNew()
+  while (§wait.Elapsed.TotalMilliseconds -lt 60000) {
+    if (Test-Path -LiteralPath §log) { §found = Select-String -LiteralPath §log -Pattern '^dsh web: (\S+)§' | Select-Object -Last 1; if (§null -ne §found) { §line = §found.Matches[0].Groups[1].Value; break } }
+    if (§null -eq (Get-CimInstance Win32_Process -Filter ('ProcessId=' + §created.ProcessId) -ErrorAction SilentlyContinue)) { break }
+    Start-Sleep -Milliseconds 400
+  }
+  if (§null -eq §line) { Write-Output 'HOST error the Harness did not announce a URL within 60s'; if (Test-Path -LiteralPath §log) { Get-Content -LiteralPath §log -TotalCount 20 }; exit 1 }
+  §nodePid = §null
+  for (§i = 0; §i -lt 20 -and §null -eq §nodePid; §i++) { §child = Get-CimInstance Win32_Process -Filter ('ParentProcessId=' + §created.ProcessId) -ErrorAction SilentlyContinue | Where-Object { §_.Name -eq 'node.exe' } | Select-Object -First 1; if (§null -ne §child) { §nodePid = §child.ProcessId } else { Start-Sleep -Milliseconds 200 } }
+  if (§null -eq §nodePid) { Write-Output 'HOST error the launcher produced no node process'; exit 1 }
+  §port = [regex]::Match(§line, ':([0-9]+)/').Groups[1].Value
+  §token = [regex]::Match(§line, '[?&]token=([A-Za-z0-9_-]+)').Groups[1].Value
+  if (-not §port -or -not §token) { Write-Output 'HOST error the readiness line carried no port or token'; exit 1 }
+  §started = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+  §json = '{"version":1,"pid":' + §nodePid + ',"port":' + §port + ',"token":"' + §token + '","started":"' + §started + '"}'
+  Set-Content -LiteralPath §rec -Value §json -Encoding ASCII
+  Write-Output ('HOST started pid=' + §nodePid + ' port=' + §port + ' token=' + §token + ' started=' + §started)
+  Write-Output ('dsh web: ' + §line)
+} finally {
+  Remove-Item -LiteralPath §lock -Recurse -Force -ErrorAction SilentlyContinue
+}""".replace('§', '$')
+
+	private val POSIX_STOP = """@@HOME@@home="§{DSH_HOME:-§HOME/.dsh}"; hd="§home/dsh-tabs"; rec="§hd/host.json"; if [ ! -f "§rec" ]; then echo "HOST none"; exit 0; fi; pid=§(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "§rec" 2>/dev/null | head -n 1); port=§(sed -n 's/.*"port":\([0-9][0-9]*\).*/\1/p' "§rec" 2>/dev/null | head -n 1); token=§(sed -n 's/.*"token":"\([A-Za-z0-9_-]*\)".*/\1/p' "§rec" 2>/dev/null | head -n 1); started=§(sed -n 's/.*"started":"\([^"]*\)".*/\1/p' "§rec" 2>/dev/null | head -n 1); if [ -n "§pid" ] && kill -0 "§pid" 2>/dev/null && ps -p "§pid" -o command= 2>/dev/null | grep -q " web "; then
+	kill "§pid" 2>/dev/null
+	sleep 1
+	kill -9 "§pid" 2>/dev/null
+	echo "HOST stopped pid=§pid"
+else
+	echo "HOST stale pid is gone or is not a Harness"
+fi; rm -f "§rec"""".replace('§', '$')
+
+	private val WINDOWS_STOP = """@@HOME@@§dshHome = if (§env:DSH_HOME) { §env:DSH_HOME } else { Join-Path §env:USERPROFILE '.dsh' }
+§rec = Join-Path (Join-Path §dshHome 'dsh-tabs') 'host.json'
+if (-not (Test-Path -LiteralPath §rec)) { Write-Output 'HOST none'; exit 0 }
+§record = §null
+try { §record = Get-Content -LiteralPath §rec -Raw | ConvertFrom-Json } catch { §record = §null }
+if (§null -eq §record -or §null -eq §record.pid) { Remove-Item -LiteralPath §rec -Force -ErrorAction SilentlyContinue; Write-Output 'HOST stale the record names no pid'; exit 0 }
+§live = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]§record.pid) -ErrorAction SilentlyContinue
+if (§null -eq §live -or §live.Name -ne 'node.exe' -or [string]::IsNullOrEmpty(§live.CommandLine) -or -not §live.CommandLine.Contains(' web ')) { Remove-Item -LiteralPath §rec -Force -ErrorAction SilentlyContinue; Write-Output 'HOST stale pid is gone or is not a Harness'; exit 0 }
+& taskkill /PID ([int]§record.pid) /T /F 2>&1 | Out-Null
+Start-Sleep -Milliseconds 500
+Remove-Item -LiteralPath §rec -Force -ErrorAction SilentlyContinue
+Write-Output ('HOST stopped pid=' + §record.pid)""".replace('§', '$')
+
+	/**
+	 * The `$dir = …; Set-Location …` statement a Windows persistent ensure runs.
+	 *
+	 * One string, not a list, because the caller appends the newline that the Windows
+	 * template expects at the marker — the same reason the desktop builder joins these
+	 * two statements with "; " instead of two lines.
+	 */
+	private fun windowsPersistentEnter(directory: String): String =
+		"\$dir = ${windowsLiteral(directory)}; if (\$dir -eq '~') { \$dir = \$env:USERPROFILE } elseif " +
+			"(\$dir.StartsWith('~/') -or \$dir.StartsWith('~\\')) { \$dir = Join-Path \$env:USERPROFILE \$dir.Substring(2) }; " +
+			"\$null = 0; Set-Location -LiteralPath \$dir -ErrorAction Stop"
+
+	/**
+	 * The program that adopts or starts the persistent host.
+	 *
+	 * It prints `HOST adopted …` or `HOST started …` and then the ordinary readiness
+	 * line, so a client parses the line it already parses. It is a one-shot command:
+	 * the channel is not the host's lifetime, and the caller disconnects as soon as the
+	 * URL is in hand.
+	 *
+	 * @param directory the far side's launch directory, or null for none.
+	 * @param home the far side's DSH home, or null for its default.
+	 * @param platform which shell family the far side speaks.
+	 * @return the remote command argument.
+	 */
+	fun persistentEnsureProgram(directory: String?, home: String?, platform: Platform = Platform.POSIX): String {
+		val enter = when {
+			directory.isNullOrEmpty() -> ""
+			platform == Platform.WINDOWS -> windowsPersistentEnter(directory) + "\n"
+			else -> remoteCd(directory) + " || exit 1; "
+		}
+		val homePart = when {
+			home.isNullOrEmpty() -> ""
+			platform == Platform.WINDOWS -> "\$env:DSH_HOME = ${windowsLiteral(home)}\n"
+			else -> "export DSH_HOME=${shellSingleQuote(home)}; "
+		}
+		val template = if (platform == Platform.WINDOWS) WINDOWS_ENSURE else POSIX_ENSURE
+		return template.replace("@@HOME@@", homePart).replace("@@ENTER@@", enter)
+	}
+
+	/**
+	 * The program that stops the recorded host.
+	 *
+	 * Only ever run from an explicit operator action: a persistent host is somebody's
+	 * running work, and nothing in this client kills one on its own.
+	 *
+	 * @param home the far side's DSH home, or null for its default.
+	 * @param platform which shell family the far side speaks.
+	 * @return the remote command argument.
+	 */
+	fun persistentStopProgram(home: String?, platform: Platform = Platform.POSIX): String {
+		val homePart = when {
+			home.isNullOrEmpty() -> ""
+			platform == Platform.WINDOWS -> "\$env:DSH_HOME = ${windowsLiteral(home)}\n"
+			else -> "export DSH_HOME=${shellSingleQuote(home)}; "
+		}
+		val template = if (platform == Platform.WINDOWS) WINDOWS_STOP else POSIX_STOP
+		return template.replace("@@HOME@@", homePart)
+	}
+
+	/**
+	 * One `HOST …` line from the ensure program.
+	 *
+	 * `adopted` is the only observable difference between "the Sessions you left" and
+	 * "a fresh Harness", and it is what the tab says afterwards. A malformed line is
+	 * null rather than a guess.
+	 */
+	data class HostLine(val adopted: Boolean, val pid: Long?, val port: Int?, val token: String?, val started: String?) {
+		companion object {
+			/**
+			 * Parse one line.
+			 *
+			 * @param line the line as printed, without its newline.
+			 * @return the parsed line, or null when it is not a `HOST adopted/started`
+			 *   line this client understands. Errors are read through [errorOf].
+			 */
+			fun parse(line: String): HostLine? {
+				val adopted = line.startsWith("HOST adopted ")
+				if (!adopted && !line.startsWith("HOST started ")) return null
+				val fields = line.substringAfter(' ').substringAfter(' ')
+					.split(' ')
+					.mapNotNull { entry -> entry.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+					.toMap()
+				return HostLine(
+					adopted = adopted,
+					pid = fields["pid"]?.toLongOrNull(),
+					port = fields["port"]?.toIntOrNull(),
+					token = fields["token"],
+					started = fields["started"]
+				)
+			}
+
+			/**
+			 * The sentence of a `HOST error …` line.
+			 *
+			 * @param line the line as printed.
+			 * @return what the far side said, or null when this is not an error line.
+			 */
+			fun errorOf(line: String): String? =
+				if (line.startsWith("HOST error ")) line.removePrefix("HOST error ") else null
+		}
+	}
+
 
 	/** Which shell family the far side speaks. */
 	enum class Platform { POSIX, WINDOWS }

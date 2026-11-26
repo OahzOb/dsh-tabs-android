@@ -217,6 +217,16 @@ class MainActivity : AppCompatActivity() {
 	private lateinit var panelTranscriptLabel: TextView
 	private lateinit var updateButton: ImageButton
 
+	/**
+	 * Whether a check is in flight.
+	 *
+	 * The control stays tappable while one runs, and a refused check can take the
+	 * length of two channels now; every tap that got through would spend another
+	 * request of the API's shared quota for nothing. One check at a time, whichever
+	 * way it was started.
+	 */
+	private var updateCheckInFlight = false
+
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 
@@ -1036,7 +1046,10 @@ class MainActivity : AppCompatActivity() {
 			val label = item.findViewById<TextView>(R.id.label)
 			val close = item.findViewById<TextView>(R.id.close)
 
-			label.text = tab.device.display
+			// A persistent tab says so in the bar: closing it does not end the Harness,
+			// and a machine whose Sessions outlive the tab is a fact the operator has to
+			// be able to see without opening a dialog.
+			label.text = tab.device.display + if (tab.device.persistent) " " + getString(R.string.persistent_marker) else ""
 			label.setTypeface(null, if (index == activeIndex) Typeface.BOLD else Typeface.NORMAL)
 			label.setTextColor(getColor(if (index == activeIndex) R.color.fg else R.color.dim))
 			item.setBackgroundColor(getColor(if (index == activeIndex) R.color.bg else R.color.bar))
@@ -1589,6 +1602,44 @@ class MainActivity : AppCompatActivity() {
 		if (!keepService) stopServiceIfIdle()
 	}
 
+	/**
+	 * End a persistent machine's Harness, from the one screen that offers it.
+	 *
+	 * **This is the only path in the app that kills a host.** Closing a tab, leaving
+	 * the app and a lost network all call `stop()`, which for a persistent session
+	 * drops the connection and leaves the Harness running — that is what the mode
+	 * means. Ending it is an explicit operator decision, because the host may be
+	 * serving another client and the work it is doing belongs to somebody.
+	 */
+	private fun stopHostNow(device: Device) {
+		val tab = tabs.firstOrNull { it.device.id == device.id }
+		val live = Sessions.running.remove(device.id) ?: tab?.session
+		tab?.session = null
+		lifecycleScope.launch {
+			// **There is usually no session here, and that is the point of the mode.**
+			// Closing a persistent tab lets go of the connection and leaves the host, so
+			// by the time an operator asks to stop one there is nothing to terminate —
+			// the stop program has to run on a connection of its own.
+			val said = if (live != null) {
+				live.terminate()
+			} else {
+				// No live feedback while it runs: the program prints a line or two and the
+				// list below is what is kept, so a streaming callback would only duplicate it.
+				RemoteSession.stopHost(device, Keys.credentialFor(passwords[device.id]))
+			}
+			tab?.state = State.IDLE
+			tab?.lines = tab?.lines.orEmpty() + said.map { "[stop] $it" }
+			val failed = said.firstOrNull { it.startsWith("FAILED") }
+			toast(
+				if (failed == null) {
+					getString(R.string.host_stopped)
+				} else {
+					getString(R.string.host_stop_failed, failed.removePrefix("FAILED: "))
+				}
+			)
+			render()
+		}
+	}
 	/** Persist the host key learned on a first connect, so a change is later caught. */
 	private fun rememberHostKey(deviceId: String, key: String) {
 		DeviceBook.mutate { stored ->
@@ -1633,6 +1684,9 @@ class MainActivity : AppCompatActivity() {
 		val port = view.findViewById<EditText>(R.id.port)
 		val directory = view.findViewById<EditText>(R.id.directory)
 		val password = view.findViewById<EditText>(R.id.password)
+		val persistent = view.findViewById<android.widget.CheckBox>(R.id.persistent)
+		val home = view.findViewById<EditText>(R.id.home)
+		val stopHost = view.findViewById<android.widget.Button>(R.id.stopHost)
 
 		// The key section is the same screen whether a machine is being added or
 		// edited, because the key belongs to the app rather than to a machine: one key
@@ -1647,6 +1701,16 @@ class MainActivity : AppCompatActivity() {
 			user.setText(it.user)
 			port.setText(it.sshPort.toString())
 			directory.setText(it.directory ?: "")
+			persistent.isChecked = it.persistent
+			home.setText(it.home ?: "")
+		}
+
+		// Stop host is the one control that ends a persistent Harness, and it is shown
+		// only where it applies: an existing persistent device with a session up. A
+		// button that can only toast "there is no host" is a button that teaches the
+		// operator nothing.
+		if (existing != null && existing.persistent) {
+			stopHost.visibility = View.VISIBLE
 		}
 
 		val builder = AlertDialog.Builder(this)
@@ -1654,18 +1718,34 @@ class MainActivity : AppCompatActivity() {
 			.setView(view)
 			.setPositiveButton(R.string.save) { _, _ ->
 				val enteredPort = port.text.toString().trim().toIntOrNull() ?: Remote.DEFAULT_SSH_PORT
-				val saved = existing?.copy(
+				val enteredDirectory = directory.text.toString().trim().takeIf { it.isNotEmpty() }
+				val wantsPersistent = persistent.isChecked
+				val enteredHome = home.text.toString().trim().takeIf { it.isNotEmpty() }
+				val base = existing?.copy(
 					label = label.text.toString().trim().ifBlank { host.text.toString().trim() },
 					host = host.text.toString().trim(),
 					user = user.text.toString().trim(),
 					sshPort = enteredPort,
-					directory = directory.text.toString().trim().takeIf { it.isNotEmpty() }
+					directory = enteredDirectory
 				) ?: Device.create(
 					label = label.text.toString().trim(),
 					host = host.text.toString().trim(),
 					user = user.text.toString().trim(),
 					sshPort = enteredPort,
-					directory = directory.text.toString().trim().takeIf { it.isNotEmpty() }
+					directory = enteredDirectory
+				)
+				// The mode and the stable port move together: a persistent device without a
+				// fixed local port gets a new origin on every reconnect, which throws away
+				// the cookie and the page's stored Session — the two things the mode is for.
+				// Turning it off drops the port instead of leaving a stale one in the book.
+				val saved = base.copy(
+					persistent = wantsPersistent,
+					home = enteredHome,
+					localPort = if (wantsPersistent) {
+						base.localPort ?: Device.deriveLocalPort(base.id)
+					} else {
+						null
+					}
 				)
 				if (saved.host.isEmpty() || saved.user.isEmpty()) {
 					toast("host and user are required")
@@ -1687,7 +1767,15 @@ class MainActivity : AppCompatActivity() {
 		if (existing != null) {
 			builder.setNeutralButton(R.string.remove) { _, _ -> confirmRemove(existing) }
 		}
-		builder.show()
+		val dialog = builder.show()
+		// Attached after show() because dismissing the dialog is the last thing the
+		// stop does: the host has to be asked to end before the screen that asked goes away.
+		if (existing != null && existing.persistent) {
+			stopHost.setOnClickListener {
+				stopHostNow(existing)
+				dialog.dismiss()
+			}
+		}
 	}
 
 	// -------------------------------------------------------------------- key
@@ -1888,16 +1976,22 @@ class MainActivity : AppCompatActivity() {
 	 * check must not do is become a startup tax. The manual control is the retry.
 	 */
 	private fun maybeCheckForUpdates() {
+		if (updateCheckInFlight) return
 		val preferences = getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE)
 		val now = System.currentTimeMillis()
 		if (now - preferences.getLong(KEY_LAST_CHECK, 0L) < UPDATE_INTERVAL_MS) return
 		preferences.edit().putLong(KEY_LAST_CHECK, now).apply()
+		updateCheckInFlight = true
 		lifecycleScope.launch {
-			val result = Updates.check()
-			// An installed release makes every cached APK at or below it uninstallable;
-			// letting them sit is the largest thing this app caches for nothing.
-			if (result is Updates.Check.Current) Updates.prune(this@MainActivity, BuildConfig.VERSION_NAME)
-			if (result is Updates.Check.Newer && !isFinishing && !isDestroyed) showUpdate(result.update)
+			try {
+				val result = Updates.check()
+				// An installed release makes every cached APK at or below it uninstallable;
+				// letting them sit is the largest thing this app caches for nothing.
+				if (result is Updates.Check.Current) Updates.prune(this@MainActivity, BuildConfig.VERSION_NAME)
+				if (result is Updates.Check.Newer && !isFinishing && !isDestroyed) showUpdate(result.update)
+			} finally {
+				updateCheckInFlight = false
+			}
 		}
 	}
 
@@ -1908,17 +2002,41 @@ class MainActivity : AppCompatActivity() {
 	 *   "up to date" or an error.
 	 */
 	private fun checkForUpdates(manual: Boolean) {
+		if (updateCheckInFlight) return
+		updateCheckInFlight = true
 		if (manual) toast(getString(R.string.update_checking))
 		lifecycleScope.launch {
-			when (val result = Updates.check()) {
-				is Updates.Check.Newer -> showUpdate(result.update)
-				is Updates.Check.Current -> {
-					Updates.prune(this@MainActivity, BuildConfig.VERSION_NAME)
-					if (manual) toast(getString(R.string.update_current))
+			try {
+				when (val result = Updates.check()) {
+					is Updates.Check.Newer -> showUpdate(result.update)
+					is Updates.Check.Current -> {
+						Updates.prune(this@MainActivity, BuildConfig.VERSION_NAME)
+						if (manual) toast(getString(R.string.update_current))
+					}
+					is Updates.Check.Failed -> if (manual) showUpdateFailure(result.reason)
 				}
-				is Updates.Check.Failed -> if (manual) toast(getString(R.string.update_failed, result.reason))
+			} finally {
+				updateCheckInFlight = false
 			}
 		}
+	}
+
+	/**
+	 * Report a failed check in a dialog rather than a toast.
+	 *
+	 * The reason is up to two sentences now — what each channel answered — and a text
+	 * toast on Android 12 and later is limited to two lines, which would cut the second
+	 * answer off, the one that says which side of the network broke. A dialog scrolls.
+	 *
+	 * @param reason - what the check said.
+	 */
+	private fun showUpdateFailure(reason: String) {
+		if (isFinishing || isDestroyed) return
+		AlertDialog.Builder(this)
+			.setTitle(R.string.update_check_failed_title)
+			.setMessage(reason)
+			.setPositiveButton(android.R.string.ok, null)
+			.show()
 	}
 
 	/**
@@ -1966,7 +2084,13 @@ class MainActivity : AppCompatActivity() {
 		dialog.show()
 		lifecycleScope.launch {
 			val result = Updates.download(this@MainActivity, update) { percent ->
-				onMain { progress.progress = percent }
+				onMain {
+					// The callback only fires once the total is known; the browser
+					// channel offers no size, so the bar starts indeterminate and
+					// becomes a real one at the first report.
+					if (progress.isIndeterminate) progress.isIndeterminate = false
+					progress.progress = percent
+				}
 			}
 			if (!isFinishing && !isDestroyed) dialog.dismiss()
 			when (result) {

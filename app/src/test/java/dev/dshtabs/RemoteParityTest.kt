@@ -306,6 +306,110 @@ class RemoteParityTest {
 	}
 
 	@Test
+	fun `the persistent programs are the ones the desktop client sends`() {
+		// The mode is worthless if one client starts a second Harness on a home where
+		// the other already has one, so these strings are the protocol, not a detail.
+		// The desktop generated them into the contract; this client has to produce the
+		// same bytes for the same device.
+		val ensure = contract().getJSONObject("persistent").getJSONObject("ensure")
+		for ((name, platform) in listOf("posix" to Remote.Platform.POSIX, "windows" to Remote.Platform.WINDOWS)) {
+			val captured = ensure.getJSONObject(name)
+			for (variant in variants) {
+				val recorded = captured.getJSONObject(variant)
+				val directory = if (recorded.has("directory")) recorded.getString("directory") else null
+				assertEquals(
+					"$name.$variant persistent ensure has drifted",
+					recorded.getString("program"),
+					Remote.persistentEnsureProgram(directory, null, platform)
+				)
+				assertEquals(
+					"$name.$variant persistent remoteCommand has drifted",
+					recorded.getString("remoteCommand"),
+					Remote.remoteCommand(Remote.persistentEnsureProgram(directory, null, platform), platform)
+				)
+			}
+			assertEquals(
+				"$name persistent stop has drifted",
+				captured.getString("stop"),
+				Remote.persistentStopProgram(null, platform)
+			)
+		}
+		// A DSH home is the one input the contract does not capture — it is a device
+		// field only the persistent mode reads — so it is pinned by the property that
+		// matters: the export lands before anything reads the record.
+		val withHome = Remote.persistentEnsureProgram(null, "/srv/dsh", Remote.Platform.POSIX)
+		val export = "export DSH_HOME='/srv/dsh'; "
+		assertTrue("the home is not exported", withHome.contains(export))
+		assertTrue(
+			"the home is exported after the record is read",
+			withHome.indexOf(export) < withHome.indexOf(Remote.HOST_RECORD_FILE)
+		)
+	}
+
+	@Test
+	fun `the derived local port is the desktop client's number`() {
+		// The port is the origin, and the origin is what the WebView's cookie and its
+		// stored Session are keyed by. The desktop derives it from the id so that the
+		// number is a property of the record; these are the numbers it produces, so a
+		// book moved between the two clients lands on the same origin rather than each
+		// side inventing its own.
+		assertEquals(41881, Device.deriveLocalPort("dev-a"))
+		assertEquals(41882, Device.deriveLocalPort("dev-b"))
+		assertEquals(41252, Device.deriveLocalPort("dev-test"))
+		assertEquals(41021, Device.deriveLocalPort("device-42"))
+	}
+
+	@Test
+	fun `a persistent device round-trips through the shared book format`() {
+		val json = org.json.JSONObject(
+			"""{"id":"dev-a","label":"box-a","host":"h","user":"u","mode":"persistent",
+				"home":"/srv/dsh","localPort":41881}""".replace("\n", "").replace("\t", "")
+		)
+		val device = Device.fromJson(json)
+		assertTrue("the mode was dropped", device.persistent)
+		assertEquals("/srv/dsh", device.home)
+		assertEquals(41881, device.localPort)
+		// And back out with the field names the desktop client wrote, so the book stays
+		// one format rather than two.
+		val again = device.toJson()
+		assertEquals("persistent", again.getString("mode"))
+		assertEquals("/srv/dsh", again.getString("home"))
+		assertEquals(41881, again.getInt("localPort"))
+		// A book with no mode is an ordinary device — an older build's file stays valid.
+		val plain = Device.fromJson(org.json.JSONObject("""{"id":"dev-b","host":"h","user":"u"}"""))
+		assertFalse(plain.persistent)
+		assertNull(plain.home)
+		assertNull(plain.localPort)
+		assertFalse(plain.toJson().has("mode"))
+	}
+
+	@Test
+	fun `a host line is parsed rather than pattern-matched at the call site`() {
+		val adopted = Remote.HostLine.parse(
+			"HOST adopted pid=858839 port=41930 token=abc-DEF_1 started=2026-11-26T11:43:46Z"
+		)
+		assertNotNull("an adopted line did not parse", adopted)
+		assertTrue("adopted was not reported", adopted!!.adopted)
+		assertEquals(858839L, adopted.pid)
+		assertEquals(41930, adopted.port)
+		assertEquals("abc-DEF_1", adopted.token)
+		assertEquals("2026-11-26T11:43:46Z", adopted.started)
+		val started = Remote.HostLine.parse("HOST started pid=1 port=2 token=t started=x")
+		assertNotNull(started)
+		assertFalse("a started line was reported as adopted", started!!.adopted)
+		// A readiness line, a stale line and a stop line are not host lines: parsing
+		// must not invent a host out of them.
+		assertNull(Remote.HostLine.parse("dsh web: http://127.0.0.1:1/?token=t"))
+		assertNull(Remote.HostLine.parse("HOST stale pid 1 is gone"))
+		assertNull(Remote.HostLine.parse("HOST none"))
+		assertEquals(
+			"the Harness did not announce a URL",
+			Remote.HostLine.errorOf("HOST error the Harness did not announce a URL")
+		)
+		assertNull(Remote.HostLine.errorOf("HOST stopped pid=1"))
+	}
+
+	@Test
 	fun `the directory rule is the same on both clients`() {
 		val safety = contract().getJSONObject("remoteProgram").getJSONObject("directorySafety")
 		val rejected = safety.getJSONArray("rejectedCharacters")
