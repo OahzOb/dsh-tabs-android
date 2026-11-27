@@ -22,7 +22,12 @@
 
 	<!-- the device dialog -->
 	<string name="field_label">label (e.g. box-b)</string>
-	<string name="field_host">host or address</string>
+	<string name="field_addresses">addresses, one per line (first is primary)\nlabel=host or just host</string>
+	<string name="address_hint">Every line reaches the same machine. The first line is the primary address that older clients use. In auto mode the app tries LAN addresses first, then the rest; picking one below remembers that address in the device book.</string>
+	<string name="address_choice_auto">Auto: LAN first, then the rest</string>
+	<string name="address_choice_manual">Use %1$s</string>
+	<string name="address_required">At least one address is required</string>
+	<string name="address_bad_choice">The selected address is not in the list</string>
 	<string name="field_user">ssh user</string>
 	<string name="field_port">ssh port (22)</string>
 	<string name="field_directory">launch directory (optional, e.g. ~/work)</string>

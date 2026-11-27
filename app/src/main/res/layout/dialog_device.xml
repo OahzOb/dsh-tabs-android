@@ -21,12 +21,35 @@
 			android:inputType="text" />
 
 		<EditText
-			android:id="@+id/host"
+			android:id="@+id/addresses"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
-			android:hint="@string/field_host"
+			android:hint="@string/field_addresses"
 			android:importantForAutofill="no"
-			android:inputType="textUri" />
+			android:inputType="textMultiLine"
+			android:minLines="2"
+			android:singleLine="false" />
+
+		<TextView
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:text="@string/address_hint"
+			android:textColor="@color/dim"
+			android:textSize="11sp" />
+
+		<Spinner
+			android:id="@+id/addressChoice"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp" />
+
+		<TextView
+			android:id="@+id/addressChoiceState"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:text="@string/address_choice_auto"
+			android:textColor="@color/dim"
+			android:textSize="11sp" />
 
 		<EditText
 			android:id="@+id/user"

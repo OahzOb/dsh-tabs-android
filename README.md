@@ -44,6 +44,7 @@ redirect, so every later reload uses the cookie rather than the URL.
 | **Several machines at once** | A tab per machine, each with its own SSH session, WebView and conversation. Switching tabs changes visibility and nothing else — the page is never reloaded, so a conversation is still there when you come back. **Connecting is the CONNECT button's job**: a tap on a tab selects it and never dials out. |
 | **No Harness on the phone** | Nothing is installed on the target machine and nothing runs locally. The app starts the far side's own `dsh web` and forwards its port. |
 | **SSH key, or a password** | Generate the app's key once and paste one line into `authorized_keys`, or use a password for a one-off connection. A machine that **refuses** the key asks for its password instead — the key is one key for every machine, so this is what keeps a host it was never pasted into reachable. A password is never stored: it is held for this run only. |
+| **One machine, several addresses** | Keep a LAN address and a Tailscale address for the same machine. Auto probes the SSH port of each and prefers a reachable LAN address, falling back to the overlay; picking an exact address in the dialog writes it to the device book and it stays until you change it. The Harness connect, `Stop host` and the host-key pin all use the same device, not the address. |
 | **Host keys are pinned** | Trust on first use, then verified on every later connect. A changed host key is refused, and you are told, rather than silently accepted. |
 | **Teardown that reaps** | Closing a tab stops the remote `dsh web` on the far side instead of leaving it holding the machine's resources. |
 | **Survives leaving the app** | A foreground service keeps the connection alive while you are in another app. |
@@ -143,9 +144,12 @@ answers, because a `403` and a timeout together say which side of the network br
 
 ## Using it
 
-- **`+`** adds a machine. It needs a host, an SSH user, and — until the app's key is
-  on that machine — a password. A password is used for this run and is **never
-  stored**; a wrong one is asked for again rather than retried.
+- **`+`** adds a machine. It needs at least one address (one per line; the first is
+  the primary one), an SSH user, and — until the app's key is on that machine — a
+  password. Extra addresses can be labelled `Tailscale=<address>`; the **Auto**
+  selector below the list tries a reachable LAN address first, and picking a
+  specific address remembers it in the device book. A password is used for this
+  run and is **never stored**; a wrong one is asked for again rather than retried.
 - **SSH key…** in the same dialog generates the app's own key and shows the line to
   paste into that machine's `authorized_keys`. A machine that has it never asks for
   anything; a machine that **refuses** it — the key was never pasted there, or the
@@ -221,6 +225,7 @@ URL。
 | **多台机器同时开** | 每台机器一个标签页，各自独立的 SSH 会话、WebView 和对话。切标签只改可见性、不重新加载页面，所以切回来对话还在。 |
 | **手机上不装任何东西** | 目标机器上不装东西，本地也不跑东西。应用只是启动对端自己的 `dsh web` 并转发端口。 |
 | **密钥或密码** | 生成一次应用自己的密钥，把一行粘进 `authorized_keys`；或者用密码做一次性连接。密码**从不保存**。 |
+| **一台机器多个地址** | 同一台机器可以同时保存局域网和 Tailscale 地址。Auto 会探测各自的 SSH 端口，优先选通的局域网地址，否则退回 overlay；在设备对话框里选定的地址会写进设备簿，直到你改回来。Harness 连接、Stop host 和主机密钥固定认的是同一台机器，不是某个地址。 |
 | **主机密钥固定** | 首次信任，之后每次连接都校验。主机密钥变了会被拒绝并告知，而不是默默接受。 |
 | **关得干净** | 关标签页会停掉远端的 `dsh web`，不会留下进程占着那台机器的资源。 |
 | **切出去也不断** | 前台服务让连接在你用别的应用时保持存活。 |

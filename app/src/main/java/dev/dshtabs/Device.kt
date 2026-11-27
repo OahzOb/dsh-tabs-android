@@ -5,6 +5,30 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
+ * One extra address of a machine, beside its primary [Device.host].
+ *
+ * The JSON shape is shared with the desktop client: `{"host":"...","label":"..."}`.
+ * `label` is a human hint (Tailscale, LAN, …), never a routing rule — address choice
+ * is decided by reachability or by the operator, see [Addresses].
+ */
+data class DeviceAddress(
+	val host: String,
+	val label: String? = null
+) {
+	companion object {
+		fun fromJson(json: JSONObject): DeviceAddress = DeviceAddress(
+			host = json.optString("host").trim(),
+			label = json.optString("label").takeIf { it.isNotBlank() }
+		)
+	}
+
+	fun toJson(): JSONObject = JSONObject().apply {
+		put("host", host)
+		label?.let { put("label", it) }
+	}
+}
+
+/**
  * One configured machine.
  *
  * The field names match `$DSH_HOME/dsh-tabs.json` on the desktop side exactly, so
@@ -51,12 +75,27 @@ data class Device(
 	 * and its stored "last Session" alive across a reconnect. Null asks the OS for a
 	 * free one, exactly as the ephemeral path does.
 	 */
-	val localPort: Int? = null
+	val localPort: Int? = null,
+	/**
+	 * Extra addresses for this same machine, **excluding** [host], which stays the
+	 * primary address so a client that does not know about this field still works.
+	 * The JSON key is `addresses`; each entry is `{"host":"…","label":"…"}`.
+	 */
+	val addresses: List<DeviceAddress> = emptyList(),
+	/**
+	 * Address selection, JSON key `addressChoice`: `"auto"` (probe LAN first, then
+	 * the rest) or one of [host]/[addresses]' hosts, which the operator picked by
+	 * hand and which is remembered in the book.
+	 */
+	val addressChoice: String = AUTO
 ) {
 	/** What the tab bar shows. */
 	val display: String get() = label.ifBlank { host }
 
 	companion object {
+		/** The one address-choice value that is not a host name. */
+		const val AUTO = "auto"
+
 		/** A new device, with an id that is stable across edits. */
 		fun create(label: String, host: String, user: String, sshPort: Int, directory: String?): Device =
 			Device(
@@ -100,7 +139,14 @@ data class Device(
 			hostKey = json.optString("hostKey").takeIf { it.isNotBlank() },
 			persistent = json.optString("mode") == "persistent",
 			home = json.optString("home").takeIf { it.isNotBlank() },
-			localPort = json.optInt("localPort", 0).takeIf { it in 1..65535 }
+			localPort = json.optInt("localPort", 0).takeIf { it in 1..65535 },
+			// Missing both fields means an old book entry: one address, auto choice.
+			addresses = json.optJSONArray("addresses")?.let { array ->
+				(0 until array.length()).mapNotNull { index ->
+					array.optJSONObject(index)?.let(DeviceAddress::fromJson)
+				}
+			} ?: emptyList(),
+			addressChoice = json.optString("addressChoice", AUTO).ifBlank { AUTO }
 		)
 	}
 
@@ -119,6 +165,12 @@ data class Device(
 		if (persistent) put("mode", "persistent")
 		home?.let { put("home", it) }
 		localPort?.let { put("localPort", it) }
+		// Only extra addresses are written: `host` above stays the primary one, so an
+		// older client that ignores these keys still reaches the machine.
+		if (addresses.isNotEmpty()) {
+			put("addresses", JSONArray().apply { addresses.forEach { put(it.toJson()) } })
+		}
+		put("addressChoice", addressChoice)
 	}
 }
 

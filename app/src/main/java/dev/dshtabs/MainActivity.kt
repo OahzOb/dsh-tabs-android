@@ -14,6 +14,7 @@ import android.provider.Settings
 import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.AdapterView
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -21,11 +22,13 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.MainThread
@@ -1715,7 +1718,9 @@ class MainActivity : AppCompatActivity() {
 	private fun showDeviceDialog(existing: Device?) {
 		val view = LayoutInflater.from(this).inflate(R.layout.dialog_device, FrameLayout(this), false)
 		val label = view.findViewById<EditText>(R.id.label)
-		val host = view.findViewById<EditText>(R.id.host)
+		val addressesField = view.findViewById<EditText>(R.id.addresses)
+		val choice = view.findViewById<Spinner>(R.id.addressChoice)
+		val choiceState = view.findViewById<TextView>(R.id.addressChoiceState)
 		val user = view.findViewById<EditText>(R.id.user)
 		val port = view.findViewById<EditText>(R.id.port)
 		val directory = view.findViewById<EditText>(R.id.directory)
@@ -1733,13 +1738,62 @@ class MainActivity : AppCompatActivity() {
 
 		existing?.let {
 			label.setText(it.label)
-			host.setText(it.host)
 			user.setText(it.user)
 			port.setText(it.sshPort.toString())
 			directory.setText(it.directory ?: "")
 			persistent.isChecked = it.persistent
 			home.setText(it.home ?: "")
 		}
+
+		// One field for every address, primary first. The old single-host field is
+		// gone on purpose: two places to edit the same host would disagree.
+		val initial = existing?.let(Addresses::candidates).orEmpty()
+		addressesField.setText(initial.joinToString("\n") { address ->
+			if (address.label != null) "${address.label}=${address.host}" else address.host
+		})
+
+		// The choice control is "auto" plus one entry per address. `choiceNames`
+		// mirrors the adapter: index 0 is the AUTO sentinel, the rest are host names.
+		val choiceNames = mutableListOf<String>()
+		val adapter = ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, mutableListOf())
+		adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+		choice.adapter = adapter
+
+		fun showChoice() {
+			val picked = choiceNames.getOrNull(choice.selectedItemPosition) ?: Device.AUTO
+			choiceState.text = if (picked == Device.AUTO) {
+				getString(R.string.address_choice_auto)
+			} else {
+				getString(R.string.address_choice_manual, picked)
+			}
+		}
+
+		fun refreshChoices(preferred: String? = null) {
+			val current = preferred ?: (choiceNames.getOrNull(choice.selectedItemPosition) ?: Device.AUTO)
+			val parsed = Addresses.parse(addressesField.text.toString())
+			choiceNames.clear()
+			choiceNames.add(Device.AUTO)
+			parsed.forEach { choiceNames.add(it.host) }
+			adapter.clear()
+			adapter.addAll(choiceNames.map { value ->
+				if (value == Device.AUTO) getString(R.string.address_choice_auto)
+				else getString(R.string.address_choice_manual, value)
+			})
+			adapter.notifyDataSetChanged()
+			choice.setSelection(if (current in choiceNames) choiceNames.indexOf(current) else 0)
+			showChoice()
+		}
+
+		choice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+			override fun onItemSelected(parent: AdapterView<*>?, selected: View?, position: Int, id: Long) = showChoice()
+			override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+		}
+		// Rebuild when the operator leaves the address field, so a just-typed
+		// address can be picked without closing and reopening the dialog.
+		addressesField.setOnFocusChangeListener { _, focused ->
+			if (!focused) refreshChoices()
+		}
+		refreshChoices(existing?.addressChoice ?: Device.AUTO)
 
 		// Stop host is the one control that ends a persistent Harness, and it is shown
 		// only where it applies: an existing persistent device with a session up. A
@@ -1753,23 +1807,39 @@ class MainActivity : AppCompatActivity() {
 			.setTitle(if (existing == null) R.string.add_title else R.string.edit_title)
 			.setView(view)
 			.setPositiveButton(R.string.save) { _, _ ->
+				val parsed = Addresses.parse(addressesField.text.toString())
+				val primary = parsed.firstOrNull()
+				if (primary == null || primary.host.isBlank()) {
+					toast(getString(R.string.address_required))
+					return@setPositiveButton
+				}
+				// Validate against what is in the field, not against the adapter:
+				// the operator may have typed a line without leaving the field first.
+				val picked = choiceNames.getOrNull(choice.selectedItemPosition) ?: Device.AUTO
+				if (picked != Device.AUTO && parsed.none { it.host.equals(picked, ignoreCase = true) }) {
+					toast(getString(R.string.address_bad_choice))
+					return@setPositiveButton
+				}
+				val extras = parsed.drop(1).map { DeviceAddress(it.host, it.label) }
 				val enteredPort = port.text.toString().trim().toIntOrNull() ?: Remote.DEFAULT_SSH_PORT
 				val enteredDirectory = directory.text.toString().trim().takeIf { it.isNotEmpty() }
 				val wantsPersistent = persistent.isChecked
 				val enteredHome = home.text.toString().trim().takeIf { it.isNotEmpty() }
 				val base = existing?.copy(
-					label = label.text.toString().trim().ifBlank { host.text.toString().trim() },
-					host = host.text.toString().trim(),
+					label = label.text.toString().trim().ifBlank { primary.host },
+					host = primary.host,
+					addresses = extras,
+					addressChoice = picked,
 					user = user.text.toString().trim(),
 					sshPort = enteredPort,
 					directory = enteredDirectory
 				) ?: Device.create(
-					label = label.text.toString().trim(),
-					host = host.text.toString().trim(),
+					label = label.text.toString().trim().ifBlank { primary.host },
+					host = primary.host,
 					user = user.text.toString().trim(),
 					sshPort = enteredPort,
 					directory = enteredDirectory
-				)
+				).copy(addresses = extras, addressChoice = picked)
 				// The mode and the stable port move together: a persistent device without a
 				// fixed local port gets a new origin on every reconnect, which throws away
 				// the cookie and the page's stored Session — the two things the mode is for.
@@ -1783,8 +1853,8 @@ class MainActivity : AppCompatActivity() {
 						null
 					}
 				)
-				if (saved.host.isEmpty() || saved.user.isEmpty()) {
-					toast("host and user are required")
+				if (saved.user.isEmpty()) {
+					toast("user is required")
 					return@setPositiveButton
 				}
 				// Refused here as well as at connect time, so a directory no shell can

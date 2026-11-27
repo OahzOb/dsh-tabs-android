@@ -340,14 +340,22 @@ class RemoteSession private constructor(
 				out += text
 				onLine(text)
 			}
+			// The host is a choice, not just a field: pick it before opening the
+			// connection so a manual address is honoured here too, and so the stop
+			// program runs on the same machine the host was started on.
+			val resolved = Addresses.resolve(device)
+			val effective = device.copy(host = resolved.host)
+			line("address: ${resolved.host} (${resolved.label ?: "selected"})")
+			resolved.message?.let(line)
+
 			var session: Session? = null
 			try {
 				val jsch = JSch()
 				if (credential is Credential.PrivateKey) {
 					jsch.addIdentity("dsh-tabs", credential.pem, null, credential.passphrase?.toByteArray(Charsets.UTF_8))
 				}
-				val connected = jsch.getSession(device.user, device.host, device.sshPort).apply {
-					hostKeyRepository = TrustOnFirstUse(device.hostKey, {})
+				val connected = jsch.getSession(effective.user, effective.host, effective.sshPort).apply {
+					hostKeyRepository = TrustOnFirstUse(effective.hostKey, {})
 					setConfig(Properties().apply {
 						put("StrictHostKeyChecking", "yes")
 						put(
@@ -365,10 +373,10 @@ class RemoteSession private constructor(
 					timeout = 0
 				}
 				session = connected
-				val platform = device.platform ?: runProbe(connected)
+				val platform = effective.platform ?: runProbe(connected)
 				val exec = connected.openChannel("exec") as ChannelExec
 				try {
-					exec.setCommand(Remote.remoteCommand(Remote.persistentStopProgram(device.home, platform), platform))
+					exec.setCommand(Remote.remoteCommand(Remote.persistentStopProgram(effective.home, platform), platform))
 					val stream = exec.inputStream
 					exec.connect(CONNECT_TIMEOUT_MS)
 					val text = readBounded(stream, CONNECT_TIMEOUT_MS.toLong())
@@ -414,7 +422,16 @@ class RemoteSession private constructor(
 					onLine(line)
 				}
 
-				note("connect ${device.user}@${device.host}:${device.sshPort}")
+				// Resolve before opening anything: the address choice is a property of
+				// the connect, and the log has to say which one was picked before the
+				// JSch calls start producing their own lines.
+				val resolved = Addresses.resolve(device)
+				val effective = device.copy(host = resolved.host)
+				note("connect ${effective.user}@${effective.host}:${effective.sshPort}")
+				note("address: ${resolved.host} (${resolved.label ?: "selected"})")
+				resolved.message?.let { note(it) }
+				// The shell command below is built from `effective`, not `device`:
+				// nothing in the remote protocol changes, only the host we dial.
 
 				var session: Session? = null
 				var channel: ChannelExec? = null
@@ -435,11 +452,11 @@ class RemoteSession private constructor(
 						)
 					}
 
-					val connected = jsch.getSession(device.user, device.host, device.sshPort).apply {
+					val connected = jsch.getSession(effective.user, effective.host, effective.sshPort).apply {
 						// Host key verification is ours, so JSch must not also do its own:
 						// `ask`/`yes` would consult a store this app does not keep, and `no`
 						// accepts a *changed* key silently. See TrustOnFirstUse.
-						hostKeyRepository = TrustOnFirstUse(device.hostKey, learned::set)
+						hostKeyRepository = TrustOnFirstUse(effective.hostKey, learned::set)
 						setConfig(Properties().apply {
 							put("StrictHostKeyChecking", "yes")
 							put(
@@ -496,7 +513,7 @@ class RemoteSession private constructor(
 					// PowerShell fail the command and print nothing. There is no exit code
 					// to inspect any more — an exception is the connection failure, which is
 					// one fewer way to be wrong than the desktop branch's code 255.
-					val platform = device.platform ?: runProbe(connected).also {
+					val platform = effective.platform ?: runProbe(connected).also {
 						note("remote platform: ${if (it == Remote.Platform.WINDOWS) "windows" else "posix"}")
 					}
 
@@ -506,11 +523,11 @@ class RemoteSession private constructor(
 					// no shell in the path and could accept them — it refuses the same
 					// set so that one device book works on both, which is the point of
 					// the shared format. See Remote.directoryProblem.
-					Remote.directoryProblem(device.directory)?.let { problem ->
+					Remote.directoryProblem(effective.directory)?.let { problem ->
 						return@withContext fail(problem, session, channel, lines)
 					}
 
-					val persistent = device.persistent && commandOverride == null
+					val persistent = effective.persistent && commandOverride == null
 					val exec = connected.openChannel("exec") as ChannelExec
 					channel = exec
 					opened.channel(exec)
@@ -520,11 +537,11 @@ class RemoteSession private constructor(
 								// One-shot: adopt the recorded host or start one that outlives
 								// this channel. The program exits after printing its URL.
 								Remote.remoteCommand(
-									Remote.persistentEnsureProgram(device.directory, device.home, platform),
+									Remote.persistentEnsureProgram(effective.directory, effective.home, platform),
 									platform
 								)
 							} else {
-								Remote.remoteCommand(Remote.remoteProgram(device.directory, platform), platform)
+								Remote.remoteCommand(Remote.remoteProgram(effective.directory, platform), platform)
 							}
 					)
 					// stdout has to be asked for before connect(), or JSch hands back a
@@ -566,7 +583,7 @@ class RemoteSession private constructor(
 					// nothing takes it in the gap. A persistent device may name one instead:
 					// a stable port is a stable origin, and the WebView's cookie and stored
 					// Session are keyed by it.
-					val bound = connected.setPortForwardingL(device.localPort ?: 0, "127.0.0.1", parsed.port)
+					val bound = connected.setPortForwardingL(effective.localPort ?: 0, "127.0.0.1", parsed.port)
 					note("tunnel 127.0.0.1:$bound -> 127.0.0.1:${parsed.port}")
 
 					// Latch the key before tearing the repository down, and hand it over
@@ -584,7 +601,7 @@ class RemoteSession private constructor(
 						transcript = synchronized(lines) { lines.toList() },
 						persistent = persistent,
 						adopted = ready.adopted,
-						home = device.home
+						home = effective.home
 					)
 					opened.remote(handle)
 					SessionStart.Ok(handle)
