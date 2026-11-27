@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+	The device form, actions included. The address field holds three lines and scrolls
+	at six: several IPs used to wrap into the fields below them and overlap, which read
+	as one unreadable block rather than a list of addresses.
+
+	Controls are at least 48dp tall and a little further apart than they were. On a
+	phone this form opens from a long-press, and a mis-tap inside a dialog should land
+	on the next field rather than on an action — Disconnect most of all, which is why
+	it lives here and not on the tab it belongs to.
+-->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
 	android:layout_width="match_parent"
 	android:layout_height="wrap_content">
@@ -24,15 +34,19 @@
 			android:id="@+id/addresses"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:hint="@string/field_addresses"
 			android:importantForAutofill="no"
 			android:inputType="textMultiLine"
-			android:minLines="2"
+			android:maxLines="6"
+			android:minLines="3"
+			android:scrollbars="vertical"
 			android:singleLine="false" />
 
 		<TextView
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:text="@string/address_hint"
 			android:textColor="@color/dim"
 			android:textSize="11sp" />
@@ -47,6 +61,7 @@
 			android:id="@+id/addressChoiceState"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:text="@string/address_choice_auto"
 			android:textColor="@color/dim"
 			android:textSize="11sp" />
@@ -55,6 +70,7 @@
 			android:id="@+id/user"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:hint="@string/field_user"
 			android:importantForAutofill="no"
 			android:inputType="text" />
@@ -63,6 +79,7 @@
 			android:id="@+id/port"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:hint="@string/field_port"
 			android:importantForAutofill="no"
 			android:inputType="number" />
@@ -71,6 +88,7 @@
 			android:id="@+id/directory"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:hint="@string/field_directory"
 			android:importantForAutofill="no"
 			android:inputType="text" />
@@ -80,6 +98,7 @@
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
 			android:layout_marginTop="6dp"
+			android:minHeight="48dp"
 			android:text="@string/field_persistent" />
 
 		<TextView
@@ -94,15 +113,29 @@
 			android:id="@+id/home"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:hint="@string/field_home"
 			android:importantForAutofill="no"
 			android:inputType="text" />
+
+		<!-- Only a machine with a session up shows this: ending a connection that is
+		     not running would be a red button that teaches the operator nothing. -->
+		<Button
+			android:id="@+id/disconnect"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
+			android:backgroundTint="@color/bad"
+			android:minHeight="48dp"
+			android:text="@string/disconnect"
+			android:visibility="gone" />
 
 		<Button
 			android:id="@+id/stopHost"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
 			android:layout_marginTop="10dp"
+			android:minHeight="48dp"
 			android:text="@string/stop_host"
 			android:visibility="gone" />
 
@@ -110,6 +143,7 @@
 			android:id="@+id/password"
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
+			android:layout_marginTop="6dp"
 			android:hint="@string/field_password"
 			android:importantForAutofill="no"
 			android:inputType="textPassword" />
@@ -133,6 +167,7 @@
 			android:layout_width="match_parent"
 			android:layout_height="wrap_content"
 			android:layout_marginTop="10dp"
+			android:minHeight="48dp"
 			android:text="@string/key_manage" />
 
 		<TextView

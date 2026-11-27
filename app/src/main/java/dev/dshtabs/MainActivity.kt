@@ -118,7 +118,7 @@ class MainActivity : AppCompatActivity() {
 		var pageUrl: String? = null,
 		/** The attempt that owns this tab's connect, or a token nobody holds once one ends. */
 		var attempt: Token = Token(),
-		/** The connect coroutine, so × and `remove` can end an attempt that is in flight. */
+		/** The connect coroutine, so Disconnect and `remove` can end an in-flight attempt. */
 		var connectJob: Job? = null
 	) {
 		/**
@@ -128,7 +128,7 @@ class MainActivity : AppCompatActivity() {
 		 * is cancelled first so that a result arriving afterwards is recognised as stale
 		 * and stopped rather than adopted.
 		 *
-		 * The registry entry goes with it. That is what makes × mean "disconnect" even
+		 * The registry entry goes with it. That is what makes Disconnect mean "disconnect" even
 		 * for a session this window adopted rather than opened: the activity may not be
 		 * the object that created it, but it is the object that stops it.
 		 */
@@ -215,6 +215,7 @@ class MainActivity : AppCompatActivity() {
 	private lateinit var panel: View
 	private lateinit var panelTitle: TextView
 	private lateinit var panelReason: TextView
+	private lateinit var panelHint: TextView
 	private lateinit var panelAction: android.widget.Button
 	private lateinit var panelTranscript: TextView
 	private lateinit var panelTranscriptLabel: TextView
@@ -264,6 +265,7 @@ class MainActivity : AppCompatActivity() {
 		panel = findViewById(R.id.panel)
 		panelTitle = findViewById(R.id.panelTitle)
 		panelReason = findViewById(R.id.panelReason)
+		panelHint = findViewById(R.id.panelHint)
 		panelAction = findViewById(R.id.panelAction)
 		panelTranscript = findViewById(R.id.panelTranscript)
 		panelTranscriptLabel = findViewById(R.id.panelTranscriptLabel)
@@ -276,7 +278,8 @@ class MainActivity : AppCompatActivity() {
 		updateButton = findViewById(R.id.update)
 		updateButton.setOnClickListener { checkForUpdates(manual = true) }
 		// The log has no screen of its own: it is only ever needed after something went
-		// wrong, and long-press is the one gesture the tab bar has left. See `Diag`.
+		// wrong, and long-press here is where it lives now that a tab's long-press opens
+		// the device dialog instead. See `Diag`.
 		updateButton.setOnLongClickListener {
 			shareDiagnostics()
 			true
@@ -483,7 +486,7 @@ class MainActivity : AppCompatActivity() {
 		// common is that the task survives, which is exactly what `isFinishing` says.
 		destroyed = true
 		if (isFinishing) {
-			// The operator left: end everything with the task, as Back and × always have.
+			// The operator left: end everything with the task, as Back and Disconnect always have.
 			Diag.log("session.stopAll finishing=true")
 			for (tab in tabs) {
 				Sessions.running.remove(tab.device.id)
@@ -1047,7 +1050,6 @@ class MainActivity : AppCompatActivity() {
 			val item = inflater.inflate(R.layout.tab, tabsRow, false)
 			val dot = item.findViewById<View>(R.id.dot)
 			val label = item.findViewById<TextView>(R.id.label)
-			val close = item.findViewById<TextView>(R.id.close)
 
 			// A persistent tab says so in the bar: closing it does not end the Harness,
 			// and a machine whose Sessions outlive the tab is a fact the operator has to
@@ -1063,30 +1065,16 @@ class MainActivity : AppCompatActivity() {
 			dot.isEnabled = tab.state != State.STARTING
 			dot.isActivated = tab.state == State.FAILED
 
-			// × stops the connection; the tab stays, because a tab is a configured
-			// machine rather than a transient view. Removing the machine is the
-			// long-press's job.
-			//
-			// **Only the selected tab shows one.** The × sat on every tab, 22dp square
-			// and 4dp from the label, so a tap aimed at a tab's right edge disconnected
-			// that machine instead of selecting it — and the way back was a CONNECT.
-			// That is the report this answers. A switch is now only a switch, and
-			// stopping a session is something done to the tab already on screen.
-			//
-			// `INVISIBLE` rather than `GONE`: the tab keeps its width, so selecting a
-			// tab does not shift its neighbours under the next tap. The invisible area
-			// still belongs to the row, so a tap there selects — which is the point.
-			close.visibility =
-				if (index == activeIndex && tab.state != State.IDLE) View.VISIBLE else View.INVISIBLE
-			close.setOnClickListener {
-				stopTab(index)
-				render()
-			}
+			// A tab is only a switch now: no control on it can disconnect a machine.
+			// The × sat 4dp from the label and caught taps aimed at the tab itself, and
+			// a stray tap cost a live session — the report this answers. Disconnect and
+			// the other machine actions moved to the device dialog that long-press
+			// opens, where each has a full-width, 48dp control of its own.
 
-			// **Selecting a tab selects it, and does nothing else.** This used to end
-			// in `maybeConnect(index)`, so tapping an idle tab opened a connection to
-			// that machine — silently when the app holds a key, through a password
-			// dialog when it does not. The operator asked to look at a tab, not to
+			// **Selecting a tab selects it, and does nothing else.** This used to dial
+			// out, so tapping an idle tab opened a connection to that machine —
+			// silently when the app holds a key, through a password dialog when it
+			// does not. The operator asked to look at a tab, not to
 			// dial out, and a phone on someone else's network doing that on a stray
 			// tap is exactly the surprise the CONNECT button exists to avoid.
 			// Reported from use.
@@ -1202,6 +1190,10 @@ class MainActivity : AppCompatActivity() {
 
 	/** Draw the panel for a tab that is not showing a page. */
 	private fun renderPanel(tab: Tab?) {
+		// Long-press is the only way to reach a tab's actions now, so say so on every
+		// panel once there is more than one tab to choose between. On a single machine
+		// the hint would only crowd the CONNECT button.
+		panelHint.visibility = if (tabs.size > 1) View.VISIBLE else View.GONE
 		if (tab == null) {
 			panelTitle.text = getString(R.string.app_name)
 			panelReason.text = getString(R.string.no_devices)
@@ -1410,7 +1402,7 @@ class MainActivity : AppCompatActivity() {
 					// `Expected: main  Calling: DefaultDispatcher-worker-2` at
 					// `showTranscript`. Every UI touch in this callback is deferred.
 					onLine = { line ->
-						// Dropped once this attempt is stale — the tab is gone, or × or a
+						// Dropped once this attempt is stale — the tab is gone, or Disconnect or a
 						// newer attempt has taken it over. `index` may no longer name this
 						// tab, so appending by index would write into a different machine's
 						// transcript.
@@ -1487,7 +1479,7 @@ class MainActivity : AppCompatActivity() {
 								Diag.log("channel.ended device=${tab.device.id} code=$code")
 								// Stop first, then write the reason: `stopTab` deliberately
 								// resets a stopped tab to idle with no error, which is right for
-								// the × button and wrong here. Measured: the other order made the
+								// the Disconnect button and wrong here. Measured: the other order made the
 								// panel say `no reason was recorded`, which is exactly the
 								// unhelpful outcome this watchdog exists to remove.
 								//
@@ -1554,7 +1546,8 @@ class MainActivity : AppCompatActivity() {
 					opened.stop()
 				}
 				// A cancelled attempt also leaves the tab saying STARTING, which offers no
-				// CONNECT button — `renderPanel` hides it — so × would be the only way out.
+				// CONNECT button — `renderPanel` hides it — so long-press and Disconnect
+				// in the device dialog would be the only way out.
 				// Nothing is running any more, so the tab goes back to the state that has a
 				// button. Skipped once the window is gone, which is the other way this block
 				// is reached: the destroy has already reset every tab itself.
@@ -1627,7 +1620,7 @@ class MainActivity : AppCompatActivity() {
 		tab.stop()
 		tab.state = State.IDLE
 		tab.error = null
-		// × ends the retry as well as the attempt. The budget is what `stopServiceIfIdle`
+		// Disconnect ends the retry as well as the attempt. The budget is what `stopServiceIfIdle`
 		// reads as "a reconnect is pending", and dropping it here is what keeps the
 		// difference between a retry that is coming and one the operator just cancelled.
 		reconnectAttempts.remove(tab.device.id)
@@ -1727,6 +1720,7 @@ class MainActivity : AppCompatActivity() {
 		val password = view.findViewById<EditText>(R.id.password)
 		val persistent = view.findViewById<android.widget.CheckBox>(R.id.persistent)
 		val home = view.findViewById<EditText>(R.id.home)
+		val disconnect = view.findViewById<android.widget.Button>(R.id.disconnect)
 		val stopHost = view.findViewById<android.widget.Button>(R.id.stopHost)
 
 		// The key section is the same screen whether a machine is being added or
@@ -1794,6 +1788,17 @@ class MainActivity : AppCompatActivity() {
 			if (!focused) refreshChoices()
 		}
 		refreshChoices(existing?.addressChoice ?: Device.AUTO)
+
+		// Disconnect is destructive, so it lives in this dialog rather than on a tab:
+		// a finger aiming at a tab should only ever switch machines, and reaching this
+		// screen takes a deliberate long-press. Only a machine with a session actually
+		// up gets the control — a red button that can only say "not connected" teaches
+		// the operator nothing. STARTING counts: a connect in flight is one to cancel.
+		val existingId = existing?.id
+		val live = existingId != null && tabs.any {
+			it.device.id == existingId && (it.state == State.RUNNING || it.state == State.STARTING)
+		}
+		if (live) disconnect.visibility = View.VISIBLE
 
 		// Stop host is the one control that ends a persistent Harness, and it is shown
 		// only where it applies: an existing persistent device with a session up. A
@@ -1874,8 +1879,19 @@ class MainActivity : AppCompatActivity() {
 			builder.setNeutralButton(R.string.remove) { _, _ -> confirmRemove(existing) }
 		}
 		val dialog = builder.show()
-		// Attached after show() because dismissing the dialog is the last thing the
-		// stop does: the host has to be asked to end before the screen that asked goes away.
+		// Attached after show() because dismissing the dialog is the last thing either
+		// stop does: the session or host has to be asked to end before the screen that
+		// asked goes away.
+		if (live) {
+			disconnect.setOnClickListener {
+				stopTab(tabs.indexOfFirst { it.device.id == existing?.id })
+				// `stopTab` resets the tab but does not draw: the × this replaced called
+				// `render` itself. Without it the WebView of the session just ended stays
+				// on screen behind the dismissed dialog and the bar still says RUNNING.
+				render()
+				dialog.dismiss()
+			}
+		}
 		if (existing != null && existing.persistent) {
 			stopHost.setOnClickListener {
 				stopHostNow(existing)

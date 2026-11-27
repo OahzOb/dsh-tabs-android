@@ -10,14 +10,15 @@
 	story and leaves `dot_running`, `dot_starting` and `dot_failed` unreachable, so a
 	connected tab keeps a grey dot and nothing in the layout looks wrong.
 
-	The row is 44dp because the row itself is what selects a tab; at 36dp it was under
-	the platform's touch guidance, and the × beside the label caught taps aimed at the
-	tab. The close control is also hidden on unselected tabs (see `renderTabs`), so
-	this is the second half of the same fix: a switch is a switch.
+	The row is 48dp because it is the whole touch target now: a tab is only a switch,
+	and no control on it can disconnect a machine. At 36dp it was under the platform's
+	touch guidance, and the × beside the label caught taps aimed at the tab — the
+	report this answers. The × is gone; disconnect and the other actions live in the
+	device dialog reached by long-press, where a mis-tap cannot end a session.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
 	android:layout_width="wrap_content"
-	android:layout_height="44dp"
+	android:layout_height="48dp"
 	android:layout_marginEnd="6dp"
 	android:background="?android:attr/selectableItemBackground"
 	android:clickable="true"
@@ -43,17 +44,4 @@
 		android:singleLine="true"
 		android:textColor="@color/dim"
 		android:textSize="13sp" />
-
-	<TextView
-		android:id="@+id/close"
-		android:layout_width="24dp"
-		android:layout_height="24dp"
-		android:layout_marginStart="10dp"
-		android:background="?android:attr/selectableItemBackgroundBorderless"
-		android:clickable="true"
-		android:focusable="true"
-		android:gravity="center"
-		android:text="×"
-		android:textColor="@color/dim"
-		android:textSize="16sp" />
 </LinearLayout>

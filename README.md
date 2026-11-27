@@ -20,7 +20,8 @@ is simpler than the desktop one rather than a port of it.
 2. **On the phone:** install the app, tap **`+`**, fill in host, user and — until the
    app's key is on that machine — a password. (A machine that refuses the app's key
    asks for its password instead of failing outright.)
-3. **Tap the tab** to connect. The Harness's web interface opens in the tab.
+3. **Tap the tab** to select it, then press **Connect** in the panel. The Harness's web
+   interface opens in the tab. Tapping a tab never dials out on its own.
 
 Do that once per machine and the tab bar remembers them.
 
@@ -157,10 +158,10 @@ answers, because a `403` and a timeout together say which side of the network br
   every machine and rotating it to reach one host would break all the others.
 - **Tap a tab** to select it; the panel's **Connect** starts the connection. A stray
   tap on a sleeping tab does not dial out.
-- **`×`** disconnects, and it appears only on the **selected** tab — switching tabs
-  cannot disconnect one by accident. The tab stays, because a tab is a configured
-  machine, not a transient view.
-- **Long-press a tab** to edit or remove the machine.
+- **Long-press a tab** to edit or remove the machine. It is also where **Disconnect**
+  lives while a session is up: a tab has no buttons on it at all, so a tap aimed at one
+  can only switch machines and never end a connection by accident. The tab stays after
+  a disconnect, because it is a configured machine, not a transient view.
 
 ## Documentation
 
@@ -202,7 +203,8 @@ each section is a decision that cost something to learn.
    不算** —— 它的 Harness 装在 `app.asar` 里，不提供 `dsh` 命令。
 2. **手机**：装上应用，点 **`+`**，填主机、SSH 用户，以及密码（在把那台机器加上本应用的
    公钥之前需要）。
-3. **点标签页**连接，Harness 的网页界面就会在标签里打开。
+3. **点标签页**只是选中它，再按面板里的 **Connect** 连接；Harness 的网页界面会在标签里
+   打开。点标签页本身不会拨号。
 
 每台机器做一次，之后标签栏会记住它们。
 
@@ -308,9 +310,9 @@ NAT、卖给很多人的代理出口、办公室网络。应用只有一条路�
 - 同一个对话框里的 **SSH key…** 生成应用自己的密钥，并给出要粘进那台机器
   `authorized_keys` 的那一行。机器有了它之后，连接就不再问任何东西。
 - **点标签页**只是选中它；要用面板里的 **Connect** 才开始连接。误触一个休眠的标签页不会拨号。
-- **`×`** 断开，而且只在**当前选中**的标签页上出现 —— 切换标签不会把它误断掉。标签页保留
-  —— 标签页是一台配置好的机器，不是临时视图。
-- **长按标签页**编辑或删除这台机器。
+- **长按标签页**编辑或删除这台机器；连接还在时，**断开**也在这个对话框里。标签页上现在
+  一个按钮都没有，所以点到标签页只会切换机器，不会误断开连接。断开后标签页仍然保留 ——
+  标签页是一台配置好的机器，不是临时视图。
 
 ## 文档
 
@@ -657,6 +659,18 @@ switching is just switching.
 reason the dot test does — nothing in the JVM source set can inflate a layout — and
 pins the three properties: the close control is tied to `index == activeIndex`, the
 row is at least 44dp, and the control is at least 8dp from the label and 24dp square.
+
+That was an improvement, not the end of it. A button on the row was still a smaller
+target beside the one the finger meant, and two more reports came in with it: setting
+several addresses made the device form overlap, and a tab still had a control on it.
+The `×` is now gone entirely. The 48dp row holds only the state dot and the label;
+**Disconnect** is a full-width 48dp control in the device dialog that long-press opens,
+shown only for a machine with a session actually up, and the panel spells the gesture
+out once there is more than one machine. The address field holds three lines and
+scrolls at six, with more room between fields, and both palettes were refreshed
+together against the same measured contrast floors. `TabBarTest` now pins the new
+contract instead of the old one: no control on a tab, no action wired into its click
+handler, and a wired, full-size Disconnect in the dialog.
 
 ## Building
 

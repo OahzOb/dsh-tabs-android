@@ -12,6 +12,9 @@
 	<string name="save">Save</string>
 	<string name="connecting">Connecting…</string>
 	<string name="transcript">Transcript</string>
+	<!-- A tab has no buttons on it any more; the gesture that reaches its actions has
+	     to say so where an operator will read it, not only in a README. -->
+	<string name="tab_actions_hint">Tap a tab to switch machines. Long-press a tab to disconnect or edit it.</string>
 	<string name="reconnecting">The server on %1$s stopped%2$s.\n\nStarting a new one — attempt %3$d of %4$d…</string>
 	<string name="reconnect_exhausted">The server on %1$s stopped %2$d times in a row%3$s, so this app has stopped trying. Tap Try again to start one by hand.</string>
 	<string name="reconnect_no_answer"> because nothing answered on its forwarded port</string>
@@ -90,6 +93,9 @@
 	<string name="persistent_hint">Keep this machine’s Harness running when the tab closes or the network drops. Every Session in that DSH home stays open — the Harness is one process per home — and Stop host is the only control that ends it.</string>
 	<string name="field_home">DSH home (optional, e.g. /home/me/.dsh)</string>
 	<string name="stop_host">Stop host</string>
+	<!-- Disconnect lives in the dialog, not on the tab: it is destructive and a tab
+	     tap must never be able to reach it by accident. -->
+	<string name="disconnect">Disconnect</string>
 	<string name="host_stopped">Host stopped.</string>
 	<string name="host_stop_failed">Could not stop the host: %1$s</string>
 	<string name="persistent_marker">·P</string>

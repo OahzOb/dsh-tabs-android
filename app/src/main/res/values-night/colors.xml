@@ -1,22 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 	<!-- The dark half of the palette; `values/colors.xml` is the light half and holds
-	     the reasoning for the split and for the contrast floors. These are the values
-	     the app shipped with when the shell was dark-only, so a phone in dark mode
-	     looks exactly as it did before, with one exception: `on_accent`.
+	     the reasoning for the split and for the contrast floors. Both files were
+	     refreshed together — the same ten names, new values — so a phone in dark mode
+	     keeps matching the shell it sits next to rather than the old one.
 
-	     `on_accent` used to be `fg` — near-white — which on this light blue is
+	     `on_accent` used to be `fg` — near-white — which on the accent blue is
 	       2.05:1: the word CONNECT on the connect button was legible only by shape.
 	     Measured off a screenshot of the button (`#6B9BF8` face, `#E6E6EA` label).
 	     Dark ink on the same face is 6.6:1, and the accent is light enough in this
-	     mode that dark is the only direction with room. -->
-	<color name="bg">#16161A</color>
-	<color name="bar">#1D1D22</color>
-	<color name="line">#33333B</color>
-	<color name="fg">#E6E6EA</color>
-	<color name="dim">#9A9AA4</color>
-	<color name="accent">#5B9DFF</color>
-	<color name="on_accent">#16161A</color>
+	     mode that dark is the only direction with room. The refresh keeps that
+	     decision and re-measures it: `#101218` on `#6AA5FF` is 7.52:1. -->
+	<color name="bg">#15161B</color>
+	<color name="bar">#1E2028</color>
+	<color name="line">#333742</color>
+	<color name="fg">#ECECF2</color>
+	<color name="dim">#9A9DAC</color>
+	<color name="accent">#6AA5FF</color>
+	<color name="on_accent">#101218</color>
 	<color name="ok">#4EC97A</color>
 	<color name="warn">#E0A33E</color>
 	<color name="bad">#E2605E</color>

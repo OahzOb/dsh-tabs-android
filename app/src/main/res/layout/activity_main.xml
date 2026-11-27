@@ -15,7 +15,7 @@
 	<LinearLayout
 		android:id="@+id/bar"
 		android:layout_width="match_parent"
-		android:layout_height="44dp"
+		android:layout_height="48dp"
 		android:background="@color/bar"
 		android:gravity="center_vertical"
 		android:orientation="horizontal">
@@ -42,18 +42,20 @@
 		     can find is the same as no updater at all. -->
 		<ImageButton
 			android:id="@+id/update"
-			android:layout_width="44dp"
+			android:layout_width="48dp"
 			android:layout_height="match_parent"
 			android:background="?android:attr/selectableItemBackground"
+			android:minHeight="48dp"
 			android:contentDescription="@string/check_updates"
 			android:src="@android:drawable/ic_popup_sync"
 			android:tint="@color/dim" />
 
 		<ImageButton
 			android:id="@+id/add"
-			android:layout_width="44dp"
+			android:layout_width="48dp"
 			android:layout_height="match_parent"
 			android:background="?android:attr/selectableItemBackground"
+			android:minHeight="48dp"
 			android:contentDescription="@string/add_device"
 			android:src="@android:drawable/ic_input_add"
 			android:tint="@color/dim" />
@@ -111,6 +113,19 @@
 					android:gravity="center_horizontal"
 					android:textColor="@color/dim"
 					android:textSize="13sp" />
+
+				<!-- A tab with no button on it needs its one gesture spelled out, or
+				     nobody finds Disconnect. Only worth the space with >1 machine. -->
+				<TextView
+					android:id="@+id/panelHint"
+					android:layout_width="match_parent"
+					android:layout_height="wrap_content"
+					android:layout_marginTop="6dp"
+					android:gravity="center_horizontal"
+					android:text="@string/tab_actions_hint"
+					android:textColor="@color/dim"
+					android:textSize="11sp"
+					android:visibility="gone" />
 
 				<Button
 					android:id="@+id/panelAction"

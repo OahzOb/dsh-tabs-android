@@ -8,26 +8,29 @@
 	     in the dark, which is a white panel in a dark window. `ThemePaletteTest`
 	     compares the two name sets and checks the contrast of every pair that text
 	     or a state dot is drawn in, so that mistake and an unreadable colour are
-	     both caught on the build machine rather than on the phone. -->
-	<color name="bg">#FAFAFC</color>
-	<color name="bar">#EDEDF2</color>
-	<color name="line">#CFCFD8</color>
-	<color name="fg">#1A1A20</color>
-	<color name="dim">#5B5B66</color>
-	<!-- The accent is **deeper here than in the dark theme, and that is measured
-	     rather than taste.** This colour is not only a button's fill: the Material
-	     theme also draws a dialog's buttons in it, as text, on the surface. `#5B9DFF`
-	     on a light surface is 2.4:1 and unreadable, which is why the light theme
-	     cannot reuse the dark one's accent. This one is 4.8:1 as text on `bar` (the
-	     surface a dialog is drawn on), 5.3:1 on `bg`, and 5.5:1 as a fill under
-	     `on_accent`. -->
-	<color name="accent">#2A63CC</color>
+	     both caught on the build machine rather than on the phone.
+
+	     This is a refresh of the same ten tokens: cooler surfaces, a deeper ink and
+	     a slightly bluer accent. It is a readability change, not a new theme, which
+	     is why the names and the floors below are unchanged. The accent is **deeper
+	     here than in the dark theme, and that is measured rather than taste.** This
+	     colour is not only a button's fill: the Material theme also draws a dialog's
+	     buttons in it, as text, on the surface. `#6AA5FF` on a light surface is
+	     2.4:1 and unreadable, which is why the light theme cannot reuse the dark
+	     one's accent. This one is 5.08:1 as text on `bar` (the surface a dialog is
+	     drawn on), 5.5:1 on `bg`, and 5.90:1 as a fill under `on_accent`. -->
+	<color name="bg">#F7F8FB</color>
+	<color name="bar">#ECEEF4</color>
+	<color name="line">#CFD3DE</color>
+	<color name="fg">#17181F</color>
+	<color name="dim">#55596A</color>
+	<color name="accent">#2A5FC7</color>
 	<color name="on_accent">#FFFFFF</color>
 	<!-- State colours, drawn as the tab's dot on the bar. They are held to 3:1
 	     against `bar` — the non-text threshold — because a dot is not a word. -->
-	<color name="ok">#1B8A4B</color>
-	<color name="warn">#9A6200</color>
-	<color name="bad">#C0392B</color>
+	<color name="ok">#147A43</color>
+	<color name="warn">#8A5A00</color>
+	<color name="bad">#B8322A</color>
 	<!-- The launcher icon's own two colours live in `drawable/ic_launcher_background.xml`
 	     and `drawable/ic_launcher_foreground.xml`, not here: they are drawings, and the
 	     shelf in one has to line up with the tabs in the other. -->
