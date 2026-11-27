@@ -14,7 +14,7 @@
 	<string name="transcript">Transcript</string>
 	<!-- A tab has no buttons on it any more; the gesture that reaches its actions has
 	     to say so where an operator will read it, not only in a README. -->
-	<string name="tab_actions_hint">Tap a tab to switch machines. Long-press a tab to disconnect or edit it.</string>
+	<string name="tab_actions_hint">Tap a tab to switch machines. Long-press a tab for Terminal, Disconnect or Edit.</string>
 	<string name="reconnecting">The server on %1$s stopped%2$s.\n\nStarting a new one — attempt %3$d of %4$d…</string>
 	<string name="reconnect_exhausted">The server on %1$s stopped %2$d times in a row%3$s, so this app has stopped trying. Tap Try again to start one by hand.</string>
 	<string name="reconnect_no_answer"> because nothing answered on its forwarded port</string>
@@ -99,4 +99,27 @@
 	<string name="host_stopped">Host stopped.</string>
 	<string name="host_stop_failed">Could not stop the host: %1$s</string>
 	<string name="persistent_marker">·P</string>
+
+	<!-- the terminal: an ssh shell of its own, not a mode of the Harness tab -->
+	<string name="terminal_open">Terminal</string>
+	<string name="terminal_web">Web</string>
+	<string name="terminal_close">Close</string>
+	<string name="terminal_title">%1$s — terminal</string>
+	<string name="terminal_marker"> ·T</string>
+	<string name="terminal_connecting">Opening a shell on %1$s…</string>
+	<string name="terminal_failed">The shell could not be opened: %1$s</string>
+	<string name="terminal_ended">The shell ended%s.</string>
+	<string name="terminal_ended_detail"> (%1$s)</string>
+	<string name="terminal_hint">The agents run on the connected machine, not on this phone. Ctrl latches for the next key; Copy takes the selection; Paste sends the clipboard to the shell.</string>
+	<string name="preset_pi">pi</string>
+	<string name="preset_opencode">opencode</string>
+	<string name="key_ctrl">Ctrl</string>
+	<string name="key_esc">Esc</string>
+	<string name="key_tab">Tab</string>
+	<string name="key_left">←</string>
+	<string name="key_up">↑</string>
+	<string name="key_down">↓</string>
+	<string name="key_right">→</string>
+	<string name="terminal_copy">Copy</string>
+	<string name="terminal_paste">Paste</string>
 </resources>

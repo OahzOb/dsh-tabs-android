@@ -46,6 +46,7 @@ class SessionService : Service() {
 		super.onTaskRemoved(rootIntent)
 		Diag.log("service.taskRemoved sessions=${Sessions.running.snapshot().size}")
 		for (session in Sessions.running.clear()) session.stop()
+		for (terminal in Terminals.running.clear()) terminal.stop()
 		stopSelf()
 	}
 

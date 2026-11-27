@@ -159,5 +159,294 @@
 					android:visibility="gone" />
 			</LinearLayout>
 		</ScrollView>
+
+		<!--
+			The terminal, over the same area the Harness page occupies. It is a sibling
+			of `webHost` and `panel` rather than a fourth tab kind, because a phone's tab
+			bar has room for machines, not for machines and their terminals: a tab is a
+			machine, and its terminal is a view of it. Switching tabs hides this and
+			nothing else; the shell channel behind it stays up.
+
+			`terminalWebHost` holds one WebView created in code, exactly as `webHost`
+			does for pages: the terminal is an xterm.js page, and it must not be rebuilt
+			when the operator looks at another tab and comes back.
+		-->
+		<LinearLayout
+			android:id="@+id/terminalHost"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent"
+			android:background="@color/bg"
+			android:orientation="vertical"
+			android:visibility="gone">
+
+			<LinearLayout
+				android:id="@+id/terminalBar"
+				android:layout_width="match_parent"
+				android:layout_height="48dp"
+				android:background="@color/bar"
+				android:gravity="center_vertical"
+				android:orientation="horizontal">
+
+				<TextView
+					android:id="@+id/terminalBack"
+					android:layout_width="wrap_content"
+					android:layout_height="match_parent"
+					android:background="?android:attr/selectableItemBackground"
+					android:clickable="true"
+					android:focusable="true"
+					android:gravity="center"
+					android:minWidth="56dp"
+					android:paddingStart="12dp"
+					android:paddingEnd="12dp"
+					android:text="@string/terminal_web"
+					android:textColor="@color/fg"
+					android:textSize="12sp" />
+
+				<TextView
+					android:id="@+id/terminalTitle"
+					android:layout_width="0dp"
+					android:layout_height="wrap_content"
+					android:layout_weight="1"
+					android:ellipsize="end"
+					android:singleLine="true"
+					android:textColor="@color/fg"
+					android:textSize="13sp"
+					android:textStyle="bold" />
+
+				<TextView
+					android:id="@+id/terminalClose"
+					android:layout_width="wrap_content"
+					android:layout_height="match_parent"
+					android:background="?android:attr/selectableItemBackground"
+					android:clickable="true"
+					android:focusable="true"
+					android:gravity="center"
+					android:minWidth="56dp"
+					android:paddingStart="12dp"
+					android:paddingEnd="12dp"
+					android:text="@string/terminal_close"
+					android:textColor="@color/fg"
+					android:textSize="12sp" />
+			</LinearLayout>
+
+			<TextView
+				android:id="@+id/terminalStatus"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:background="@color/bar"
+				android:paddingStart="10dp"
+				android:paddingEnd="10dp"
+				android:paddingBottom="4dp"
+				android:textColor="@color/dim"
+				android:textSize="11sp"
+				android:visibility="gone" />
+
+			<FrameLayout
+				android:id="@+id/terminalWebHost"
+				android:layout_width="match_parent"
+				android:layout_height="0dp"
+				android:layout_weight="1" />
+
+			<!-- The agents the desktop client offers, run on the far side. Only the two
+			     that are commands are buttons; the login shell is the terminal itself. -->
+			<LinearLayout
+				android:id="@+id/terminalPresetBar"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:background="@color/bar"
+				android:gravity="center_vertical"
+				android:orientation="horizontal"
+				android:paddingStart="6dp"
+				android:paddingEnd="6dp">
+
+				<TextView
+					android:id="@+id/presetPi"
+					android:layout_width="wrap_content"
+					android:layout_height="wrap_content"
+					android:background="?android:attr/selectableItemBackground"
+					android:clickable="true"
+					android:focusable="true"
+					android:gravity="center"
+					android:minWidth="52dp"
+					android:minHeight="44dp"
+					android:paddingStart="12dp"
+					android:paddingEnd="12dp"
+					android:text="@string/preset_pi"
+					android:textColor="@color/fg"
+					android:textSize="12sp" />
+
+				<TextView
+					android:id="@+id/presetOpencode"
+					android:layout_width="wrap_content"
+					android:layout_height="wrap_content"
+					android:background="?android:attr/selectableItemBackground"
+					android:clickable="true"
+					android:focusable="true"
+					android:gravity="center"
+					android:minWidth="52dp"
+					android:minHeight="44dp"
+					android:paddingStart="12dp"
+					android:paddingEnd="12dp"
+					android:text="@string/preset_opencode"
+					android:textColor="@color/fg"
+					android:textSize="12sp" />
+			</LinearLayout>
+
+			<!--
+				Keys a soft keyboard does not have. The letters go through xterm normally;
+				Ctrl latches for the next key, which is how it behaves on a real keyboard.
+			-->
+			<HorizontalScrollView
+				android:id="@+id/terminalKeyBar"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:background="@color/bar"
+				android:scrollbars="none">
+
+				<LinearLayout
+					android:layout_width="wrap_content"
+					android:layout_height="wrap_content"
+					android:orientation="horizontal"
+					android:paddingStart="4dp"
+					android:paddingEnd="4dp">
+
+					<TextView
+						android:id="@+id/keyCtrl"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="48dp"
+						android:minHeight="44dp"
+						android:paddingStart="8dp"
+						android:paddingEnd="8dp"
+						android:text="@string/key_ctrl"
+						android:textColor="@color/dim"
+						android:textSize="12sp" />
+
+					<TextView
+						android:id="@+id/keyEsc"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="48dp"
+						android:minHeight="44dp"
+						android:paddingStart="8dp"
+						android:paddingEnd="8dp"
+						android:text="@string/key_esc"
+						android:textColor="@color/fg"
+						android:textSize="12sp" />
+
+					<TextView
+						android:id="@+id/keyTab"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="48dp"
+						android:minHeight="44dp"
+						android:paddingStart="8dp"
+						android:paddingEnd="8dp"
+						android:text="@string/key_tab"
+						android:textColor="@color/fg"
+						android:textSize="12sp" />
+
+					<TextView
+						android:id="@+id/keyLeft"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="44dp"
+						android:minHeight="44dp"
+						android:text="@string/key_left"
+						android:textColor="@color/fg"
+						android:textSize="14sp" />
+
+					<TextView
+						android:id="@+id/keyUp"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="44dp"
+						android:minHeight="44dp"
+						android:text="@string/key_up"
+						android:textColor="@color/fg"
+						android:textSize="14sp" />
+
+					<TextView
+						android:id="@+id/keyDown"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="44dp"
+						android:minHeight="44dp"
+						android:text="@string/key_down"
+						android:textColor="@color/fg"
+						android:textSize="14sp" />
+
+					<TextView
+						android:id="@+id/keyRight"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="44dp"
+						android:minHeight="44dp"
+						android:text="@string/key_right"
+						android:textColor="@color/fg"
+						android:textSize="14sp" />
+
+					<TextView
+						android:id="@+id/keyCopy"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="56dp"
+						android:minHeight="44dp"
+						android:paddingStart="8dp"
+						android:paddingEnd="8dp"
+						android:text="@string/terminal_copy"
+						android:textColor="@color/fg"
+						android:textSize="12sp" />
+
+					<TextView
+						android:id="@+id/keyPaste"
+						android:layout_width="wrap_content"
+						android:layout_height="wrap_content"
+						android:background="?android:attr/selectableItemBackground"
+						android:clickable="true"
+						android:focusable="true"
+						android:gravity="center"
+						android:minWidth="56dp"
+						android:minHeight="44dp"
+						android:paddingStart="8dp"
+						android:paddingEnd="8dp"
+						android:text="@string/terminal_paste"
+						android:textColor="@color/fg"
+						android:textSize="12sp" />
+				</LinearLayout>
+			</HorizontalScrollView>
+		</LinearLayout>
 	</FrameLayout>
 </LinearLayout>

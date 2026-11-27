@@ -115,3 +115,17 @@ object Sessions {
 	 */
 	val running = SessionRegistry<RemoteSession>()
 }
+
+/**
+ * The interactive terminals that are up in this process, keyed by device id.
+ *
+ * A terminal is not a [Sessions] entry: it is a second ssh session of its own, its
+ * lifetime is the operator's "Close" rather than a Harness coordinator's, and a
+ * Harness reconnect must not take a shell down with it. What the two registries share
+ * is the property they exist for — a window that is recreated hands the connection
+ * over instead of stopping it — and the foreground service must stay up while
+ * **either** holds something.
+ */
+object Terminals {
+	val running = SessionRegistry<TerminalSession>()
+}

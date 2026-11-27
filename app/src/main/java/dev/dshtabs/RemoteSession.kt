@@ -1,7 +1,6 @@
 package dev.dshtabs
 
 import com.jcraft.jsch.ChannelExec
-import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -16,7 +15,6 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.Properties
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -350,28 +348,8 @@ class RemoteSession private constructor(
 
 			var session: Session? = null
 			try {
-				val jsch = JSch()
-				if (credential is Credential.PrivateKey) {
-					jsch.addIdentity("dsh-tabs", credential.pem, null, credential.passphrase?.toByteArray(Charsets.UTF_8))
-				}
-				val connected = jsch.getSession(effective.user, effective.host, effective.sshPort).apply {
-					hostKeyRepository = TrustOnFirstUse(effective.hostKey, {})
-					setConfig(Properties().apply {
-						put("StrictHostKeyChecking", "yes")
-						put(
-							"PreferredAuthentications",
-							if (credential is Credential.Password) "password,keyboard-interactive,publickey" else "publickey"
-						)
-						put("ServerAliveInterval", "20000")
-						put("ServerAliveCountMax", "3")
-					})
-					if (credential is Credential.Password) setPassword(credential.secret)
-					// A host that offers only keyboard-interactive takes its answers from
-					// `UserInfo`, not from `setPassword`; see `PasswordUserInfo`.
-					if (credential is Credential.Password) setUserInfo(PasswordUserInfo(credential.secret))
-					connect(CONNECT_TIMEOUT_MS)
-					timeout = 0
-				}
+				// The one way this app opens a session; see `Ssh`.
+				val connected = Ssh.open(effective, credential)
 				session = connected
 				val platform = effective.platform ?: runProbe(connected)
 				val exec = connected.openChannel("exec") as ChannelExec
@@ -440,68 +418,10 @@ class RemoteSession private constructor(
 					// so it is latched here rather than written to the device directly.
 					val learned = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
-					val jsch = JSch()
-					if (credential is Credential.PrivateKey) {
-						// The four-argument overload, which is the only one that takes a
-						// passphrase at all. `pubkey` stays null: the key carries its own.
-						jsch.addIdentity(
-							"dsh-tabs",
-							credential.pem,
-							null,
-							credential.passphrase?.toByteArray(Charsets.UTF_8)
-						)
-					}
-
-					val connected = jsch.getSession(effective.user, effective.host, effective.sshPort).apply {
-						// Host key verification is ours, so JSch must not also do its own:
-						// `ask`/`yes` would consult a store this app does not keep, and `no`
-						// accepts a *changed* key silently. See TrustOnFirstUse.
-						hostKeyRepository = TrustOnFirstUse(effective.hostKey, learned::set)
-						setConfig(Properties().apply {
-							put("StrictHostKeyChecking", "yes")
-							put(
-								"PreferredAuthentications",
-								if (credential is Credential.Password) "password,keyboard-interactive,publickey" else "publickey"
-							)
-							// Keep the connection alive across idle periods.
-							//
-							// The Harness UI holds a long-lived channel open and otherwise sits
-							// silent, and a NAT — a phone's carrier, or the path Tailscale takes —
-							// drops a connection that stops producing packets. This is the only
-							// defence against that: JSch sends the keepalive only when this
-							// property is set, and the interval alone is silently ignored.
-							//
-							// **The interval is in milliseconds.** OpenSSH's option of the same
-							// name is in seconds, and that is a different quantity: a literal
-							// `20` here asks for a keepalive every 20 ms, fifty a second, which
-							// is a flood rather than a keepalive.
-							//
-							// The `connection lost, retry #1…#7` once measured about twenty
-							// seconds into a session was not this: it was the exec channel
-							// closing under a healthy session because its readers had stopped.
-							// See "The channel that was read to the readiness line and then
-							// abandoned" in the README.
-							put("ServerAliveInterval", "20000")
-							put("ServerAliveCountMax", "3")
-							System.setProperty("jsch.keepalive.message", "true")
-						})
-						if (credential is Credential.Password) setPassword(credential.secret)
-						// Keyboard-interactive reads its answers from `UserInfo`; without
-						// this, a PAM-only host refuses a correct password with `Auth fail`.
-						if (credential is Credential.Password) setUserInfo(PasswordUserInfo(credential.secret))
-						// **`timeout` is not a connect timeout.** JSch uses this field as
-						// the socket's SO_TIMEOUT for the whole life of the session, so a
-						// value set here disconnects a perfectly healthy but quiet session
-						// that many seconds after its last byte — and the keepalive below
-						// fires on the same interval, so it can never win that race. The
-						// handshake is bounded by the `connect(...)` argument instead, and
-						// liveness is the keepalive's job: 20 s x 3 misses = 60 s to notice
-						// a peer that is truly gone.
-						connect(CONNECT_TIMEOUT_MS)
-						// Clear any read timeout the handshake left on the socket: the
-						// session is idle by design between UI requests.
-						timeout = 0
-					}
+					// One documented way to build a session, shared with the terminal; see `Ssh`.
+					// Host-key policy, credential methods, keepalive and the socket timeout all
+					// live there, so the two kinds of connection cannot drift apart.
+					val connected = Ssh.open(effective, credential, learned::set)
 					// Registered as soon as the session exists, not when the `RemoteSession`
 					// wrapper is built: everything below can block, and a cancellation at the
 					// `withContext` boundary must still have something to disconnect.

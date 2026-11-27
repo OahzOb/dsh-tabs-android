@@ -106,6 +106,18 @@ class MainActivity : AppCompatActivity() {
 		var session: RemoteSession? = null,
 		var error: String? = null,
 		var lines: List<String> = emptyList(),
+		/** The shell this tab's terminal view is attached to, or null when none is open. */
+		var terminal: TerminalSession? = null,
+		/** Whether this tab is showing its terminal rather than its Harness page. */
+		var showTerminal: Boolean = false,
+		/** What the terminal is doing; null until one has been opened. */
+		var terminalState: TerminalSession.State? = null,
+		/** The one sentence a failed or ended shell carries. */
+		var terminalError: String? = null,
+		/** Which agent presets the far side answered for. */
+		var presets: TerminalPresets.Availability = TerminalPresets.Availability(),
+		/** The terminal open attempt that owns this tab, or a token nobody holds once one ends. */
+		var terminalAttempt: Token = Token(),
 		/**
 		 * The page this tab's WebView is showing, which is not always the session's URL.
 		 *
@@ -221,6 +233,27 @@ class MainActivity : AppCompatActivity() {
 	private lateinit var panelTranscriptLabel: TextView
 	private lateinit var updateButton: ImageButton
 
+	private lateinit var terminalHost: LinearLayout
+	private lateinit var terminalWebHost: FrameLayout
+	private lateinit var terminalTitle: TextView
+	private lateinit var terminalStatus: TextView
+	private lateinit var presetPi: TextView
+	private lateinit var presetOpencode: TextView
+	private lateinit var ctrlKey: TextView
+
+	/**
+	 * The terminal renderers this window owns, one per device id.
+	 *
+	 * A terminal's WebView is the same thing a Harness tab's is: build it once for the
+	 * session it shows and then only change visibility. A window that is recreated has
+	 * no views, so it builds them again around the shell the registry kept — the
+	 * scrollback is lost, which is the one thing a page reload loses too.
+	 */
+	private val terminalViews = mutableMapOf<String, TerminalView>()
+
+	/** Whether the Ctrl key on the terminal bar is latched for the next key. */
+	private var ctrlLatched = false
+
 	/**
 	 * Whether a check is in flight.
 	 *
@@ -269,6 +302,15 @@ class MainActivity : AppCompatActivity() {
 		panelAction = findViewById(R.id.panelAction)
 		panelTranscript = findViewById(R.id.panelTranscript)
 		panelTranscriptLabel = findViewById(R.id.panelTranscriptLabel)
+
+		terminalHost = findViewById(R.id.terminalHost)
+		terminalWebHost = findViewById(R.id.terminalWebHost)
+		terminalTitle = findViewById(R.id.terminalTitle)
+		terminalStatus = findViewById(R.id.terminalStatus)
+		presetPi = findViewById(R.id.presetPi)
+		presetOpencode = findViewById(R.id.presetOpencode)
+		ctrlKey = findViewById(R.id.keyCtrl)
+		wireTerminalControls()
 
 		// No WebView is configured here: there is no page yet, and the views are
 		// created by `renderContent` when a session starts. The one global setting
@@ -339,6 +381,22 @@ class MainActivity : AppCompatActivity() {
 			if (tabs.none { it.device.id == id }) {
 				Sessions.running.remove(id)
 				session.stop()
+			}
+		}
+
+		// The same handover for shells. A terminal is a second ssh session, so it has
+		// its own registry, but the rule is identical: a window that replaced this one
+		// must find the shell it was typing in rather than a panel offering to open it.
+		for (tab in tabs) {
+			if (tab.terminal != null) continue
+			val terminal = Terminals.running.snapshot()[tab.device.id] ?: continue
+			adoptTerminal(tab, terminal)
+			if (first == null) first = tab
+		}
+		for ((id, terminal) in Terminals.running.snapshot()) {
+			if (tabs.none { it.device.id == id }) {
+				Terminals.running.remove(id)
+				terminal.stop()
 			}
 		}
 
@@ -491,10 +549,14 @@ class MainActivity : AppCompatActivity() {
 			for (tab in tabs) {
 				Sessions.running.remove(tab.device.id)
 				tab.stop()
+				tab.terminal?.stop()
+				tab.terminal = null
 			}
 			// A session with no tab here has no owner left; stop it rather than lose the
 			// only reference to it. This is also the path that clears the registry.
 			for (session in Sessions.running.clear()) session.stop()
+			for (terminal in Terminals.running.clear()) terminal.stop()
+			destroyTerminalViews()
 			SessionService.stop(this)
 			return
 		}
@@ -514,7 +576,18 @@ class MainActivity : AppCompatActivity() {
 			// The registry owns it now; `tab.stop()` would stop it as well.
 			tab.session = null
 		}
-		if (Sessions.running.isEmpty()) SessionService.stop(this)
+		for (tab in tabs) {
+			val terminal = tab.terminal ?: continue
+			terminal.windowVisible = tab.showTerminal
+			val displaced = Terminals.running.adopt(tab.device.id, terminal)
+			if (displaced != null && displaced !== terminal) displaced.stop()
+			Diag.log("terminal.handover device=${tab.device.id}")
+			tab.terminal = null
+		}
+		// A WebView cannot outlive its activity, so the renderers go with it; the
+		// shells do not. The next window rebinds their output when it adopts them.
+		destroyTerminalViews()
+		if (Sessions.running.isEmpty() && Terminals.running.isEmpty()) SessionService.stop(this)
 	}
 
 	/**
@@ -538,7 +611,10 @@ class MainActivity : AppCompatActivity() {
 		backgroundedAt = 0L
 		Diag.log("activity.start awayMs=$away")
 		// A first start has nothing to be suspicious of; a return does.
-		if (away > 0L) verifyRunningSessions("app returned")
+		if (away > 0L) {
+			verifyRunningSessions("app returned")
+			verifyRunningTerminals()
+		}
 	}
 
 	override fun onStop() {
@@ -667,7 +743,16 @@ class MainActivity : AppCompatActivity() {
 		val root = findViewById<View>(R.id.root)
 		ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
 			val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-			view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+			// **The keyboard is not in `systemBars`, and on a current platform it is not
+			// taken out of the window either.** The activity declares `adjustResize`, but
+			// from API 35 every application is drawn edge to edge and `adjustResize`
+			// stops resizing for the IME; the keyboard then floats over the bottom of the
+			// window. For a terminal that is the key bar and the preset row — the two
+			// controls a soft keyboard forces an operator to reach for — so the IME's
+			// inset is applied as bottom padding, and the whole window (the terminal
+			// included, which then refits itself) sits above the keyboard.
+			val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+			view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
 			insets
 		}
 		ViewCompat.requestApplyInsets(root)
@@ -721,6 +806,23 @@ class MainActivity : AppCompatActivity() {
 		// A live page paints its own background; this one shows before the document
 		// paints, and around a page shorter than the window.
 		for (entry in views.values) entry.view.setBackgroundColor(bg)
+
+		// The terminal's chrome is inflated once and `uiMode` is handled without a
+		// recreation, so its colours have to be repainted like the rest. The terminal
+		// page itself keeps its own dark palette in both modes.
+		findViewById<View>(R.id.terminalHost).setBackgroundColor(bg)
+		for (id in intArrayOf(R.id.terminalBar, R.id.terminalPresetBar, R.id.terminalKeyBar, R.id.terminalStatus)) {
+			findViewById<View>(id)?.setBackgroundColor(bar)
+		}
+		for (id in intArrayOf(
+			R.id.terminalBack, R.id.terminalClose, R.id.terminalTitle, R.id.presetPi, R.id.presetOpencode,
+			R.id.keyEsc, R.id.keyTab, R.id.keyLeft, R.id.keyUp, R.id.keyDown, R.id.keyRight,
+			R.id.keyCopy, R.id.keyPaste
+		)) {
+			findViewById<TextView>(id)?.setTextColor(fg)
+		}
+		terminalStatus.setTextColor(dim)
+		if (!ctrlLatched) ctrlKey.setTextColor(dim)
 
 		applySystemBars()
 	}
@@ -1054,7 +1156,9 @@ class MainActivity : AppCompatActivity() {
 			// A persistent tab says so in the bar: closing it does not end the Harness,
 			// and a machine whose Sessions outlive the tab is a fact the operator has to
 			// be able to see without opening a dialog.
-			label.text = tab.device.display + if (tab.device.persistent) " " + getString(R.string.persistent_marker) else ""
+			val persistentMark = if (tab.device.persistent) " " + getString(R.string.persistent_marker) else ""
+			val terminalMark = if (tab.terminal != null) getString(R.string.terminal_marker) else ""
+			label.text = tab.device.display + persistentMark + terminalMark
 			label.setTypeface(null, if (index == activeIndex) Typeface.BOLD else Typeface.NORMAL)
 			label.setTextColor(getColor(if (index == activeIndex) R.color.fg else R.color.dim))
 			item.setBackgroundColor(getColor(if (index == activeIndex) R.color.bg else R.color.bar))
@@ -1112,6 +1216,21 @@ class MainActivity : AppCompatActivity() {
 	 */
 	private fun renderContent() {
 		val tab = tabs.getOrNull(activeIndex)
+
+		// A terminal is a view of the same tab, so it takes the whole content area
+		// while it is showing and gives it back when it is not. The shell keeps
+		// running while it is hidden: switching to another machine's tab, or back to
+		// this one's Harness page, changes visibility and nothing else.
+		val terminal = tab?.terminal
+		if (tab != null && tab.showTerminal && terminal != null) {
+			for (other in tabs) other.terminal?.windowVisible = false
+			terminal.windowVisible = true
+			renderTerminal(tab, terminal)
+			return
+		}
+		terminalHost.visibility = View.GONE
+		for (other in tabs) other.terminal?.windowVisible = false
+
 		// Latched once, so the non-null check below is the compiler's too — a
 		// `takeIf` in a local reads better but does not smart-cast at the use sites.
 		val showing = tab?.takeIf { it.state == State.RUNNING }
@@ -1594,6 +1713,7 @@ class MainActivity : AppCompatActivity() {
 	 */
 	private fun stopServiceIfIdle() {
 		val busy = !Sessions.running.isEmpty() ||
+			!Terminals.running.isEmpty() ||
 			(!destroyed && tabs.any {
 				it.state == State.RUNNING || it.state == State.STARTING ||
 					(reconnectAttempts[it.device.id] ?: 0) > 0
@@ -1689,6 +1809,356 @@ class MainActivity : AppCompatActivity() {
 		}
 	}
 
+	// ---------------------------------------------------------------- terminal
+
+	/**
+	 * The terminal bar, wired once.
+	 *
+	 * The bar is plain views rather than a menu because every one of these is used
+	 * constantly while typing in a shell, and a key bar two taps deep is not a key bar.
+	 * Ctrl latches for the next key — that is how the key behaves on a real keyboard,
+	 * and a toggle that swallowed the key after it would be a different feature.
+	 */
+	private fun wireTerminalControls() {
+		findViewById<TextView>(R.id.terminalBack).setOnClickListener { showHarnessPage() }
+		findViewById<TextView>(R.id.terminalClose).setOnClickListener { closeTerminal() }
+		presetPi.setOnClickListener { runPreset(TerminalPresets.ALL[1]) }
+		presetOpencode.setOnClickListener { runPreset(TerminalPresets.ALL[2]) }
+		wireTerminalKey(R.id.keyEsc, TerminalKeys.ESC)
+		wireTerminalKey(R.id.keyTab, TerminalKeys.TAB)
+		wireTerminalKey(R.id.keyLeft, TerminalKeys.LEFT)
+		wireTerminalKey(R.id.keyUp, TerminalKeys.UP)
+		wireTerminalKey(R.id.keyDown, TerminalKeys.DOWN)
+		wireTerminalKey(R.id.keyRight, TerminalKeys.RIGHT)
+		findViewById<TextView>(R.id.keyCopy).setOnClickListener { activeTerminalView()?.copySelection() }
+		findViewById<TextView>(R.id.keyPaste).setOnClickListener { activeTerminalView()?.pasteClipboard() }
+		ctrlKey.setOnClickListener { toggleCtrl() }
+		// The keyboard sliding in and out resizes this container, and the terminal has
+		// to tell the pty: a shell that keeps formatting for the old width is the first
+		// symptom of a terminal that does not fit itself.
+		terminalWebHost.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+			activeTerminalView()?.fit()
+		}
+	}
+
+	private fun wireTerminalKey(id: Int, sequence: String) {
+		findViewById<TextView>(id).setOnClickListener { writeToTerminal(sequence) }
+	}
+
+	private fun toggleCtrl() {
+		ctrlLatched = !ctrlLatched
+		ctrlKey.setTextColor(getColor(if (ctrlLatched) R.color.accent else R.color.dim))
+	}
+
+	/** The renderer of the active tab's terminal, when that terminal is showing. */
+	private fun activeTerminalView(): TerminalView? =
+		tabs.getOrNull(activeIndex)?.takeIf { it.showTerminal }?.let { terminalViews[it.device.id] }
+
+	/** The active tab's shell, when one is open. */
+	private fun activeTerminal(): Pair<Tab, TerminalSession>? {
+		val tab = tabs.getOrNull(activeIndex) ?: return null
+		val session = tab.terminal ?: return null
+		return tab to session
+	}
+
+	/**
+	 * Apply a latched Ctrl to what xterm sent.
+	 *
+	 * xterm sends a key press as text; with Ctrl latched this turns a letter into its
+	 * control byte and anything else is passed through unchanged. The latch clears on
+	 * the first key it applies to, which is what a real Ctrl does.
+	 */
+	private fun applyCtrl(data: String): String {
+		if (!ctrlLatched || data.isEmpty()) return data
+		val converted = TerminalKeys.withCtrl(data) ?: return data
+		ctrlLatched = false
+		ctrlKey.setTextColor(getColor(R.color.dim))
+		return converted
+	}
+
+	private fun writeToTerminal(text: String) {
+		activeTerminal()?.second?.write(text)
+	}
+
+	/**
+	 * Type a preset's command into the shell.
+	 *
+	 * The agents run on the connected machine, not on the phone: `pi` and `opencode` are
+	 * installed where the work is, and the app is a way to reach them. The button only
+	 * types the command; the shell decides whether it exists.
+	 */
+	private fun runPreset(preset: TerminalPresets.Preset) {
+		val command = preset.command ?: return
+		writeToTerminal(command + TerminalKeys.ENTER)
+		activeTerminalView()?.focus()
+	}
+
+	/** Show the tab's Harness page (or panel) again; the shell keeps running. */
+	private fun showHarnessPage() {
+		val tab = tabs.getOrNull(activeIndex) ?: return
+		tab.showTerminal = false
+		render()
+	}
+
+	/** End the active tab's shell, and only the shell. */
+	private fun closeTerminal() {
+		val tab = tabs.getOrNull(activeIndex) ?: return
+		tab.terminalAttempt = Token()
+		tab.terminal?.stop()
+		tab.terminal = null
+		tab.showTerminal = false
+		tab.terminalState = null
+		tab.terminalError = null
+		tab.presets = TerminalPresets.Availability()
+		Terminals.running.remove(tab.device.id)
+		terminalViews.remove(tab.device.id)?.destroy()
+		render()
+		stopServiceIfIdle()
+	}
+
+	private fun destroyTerminalViews() {
+		for (renderer in terminalViews.values) renderer.destroy()
+		terminalViews.clear()
+		terminalWebHost.removeAllViews()
+	}
+
+	/**
+	 * Open, or show, one machine's terminal.
+	 *
+	 * A terminal is a view of its machine's tab rather than a fourth kind of tab: a
+	 * phone's bar has room for the machines an operator works with, and a terminal is
+	 * something you do to one of them.
+	 */
+	private fun openTerminal(device: Device) {
+		val index = tabs.indexOfFirst { it.device.id == device.id }
+		if (index < 0) return
+		val tab = tabs[index]
+		activeIndex = index
+		tab.showTerminal = true
+		if (tab.terminal != null) {
+			render()
+			return
+		}
+		// The same rule the quick start states for the Harness: with no key on the
+		// machine there is nothing to try, and an empty password attempt is not a
+		// connect — it is a few failed logins that end in
+		// `SSH_MSG_DISCONNECT: 2 Too many authentication failures` instead of a form.
+		val secret = passwords[device.id]
+		if (secret == null && !Keys.exists()) {
+			askPassword(device, getString(R.string.need_password)) { entered ->
+				passwords[device.id] = entered
+				startTerminal(tab, entered, usePassword = true)
+			}
+			return
+		}
+		startTerminal(tab, secret, usePassword = secret != null)
+	}
+
+	/**
+	 * Open the shell for one tab.
+	 *
+	 * The credential is built on `Dispatchers.IO` for the same reason the Harness
+	 * connect documents: reading the key goes through the Android Keystore, and doing
+	 * that on the main thread is a visible pause on every open.
+	 *
+	 * A **refused key** is the one failure that gets a second way in, exactly as on the
+	 * Harness connect: the app has one key for every machine, so a host it was never
+	 * pasted into would otherwise have no path to a terminal at all.
+	 */
+	private fun startTerminal(tab: Tab, secret: String?, usePassword: Boolean) {
+		val device = tab.device
+		val attempt = Token()
+		tab.terminalAttempt = attempt
+		tab.showTerminal = true
+		tab.terminalState = TerminalSession.State.CONNECTING
+		tab.terminalError = null
+		render()
+		lifecycleScope.launch {
+			val credential = try {
+				withContext(Dispatchers.IO) { Keys.credentialFor(secret, usePassword) }
+			} catch (error: Exception) {
+				tab.terminalState = TerminalSession.State.FAILED
+				tab.terminalError = error.message ?: error.javaClass.simpleName
+				render()
+				return@launch
+			}
+			if (!isCurrentTerminalAttempt(tab, attempt)) return@launch
+
+			val terminal = TerminalSession(device, credential)
+			terminal.onOutput = { text -> terminalViews[device.id]?.write(text) }
+			terminal.onState = { state, detail -> onMain {
+				if (tabs.none { it === tab }) return@onMain
+				tab.terminalState = state
+				tab.terminalError = detail
+				if (state == TerminalSession.State.FAILED || state == TerminalSession.State.ENDED) {
+					Terminals.running.remove(device.id)
+				}
+				render()
+			} }
+			terminal.onPresets = { availability -> onMain {
+				if (tabs.none { it === tab }) return@onMain
+				tab.presets = availability
+				render()
+			} }
+			tab.terminal = terminal
+			Terminals.running.adopt(device.id, terminal)?.let { displaced ->
+				if (displaced !== terminal) displaced.stop()
+			}
+			SessionService.start(this@MainActivity, device.display)
+
+			withContext(Dispatchers.IO) {
+				terminal.open { key -> onMain { rememberHostKey(device.id, key) } }
+			}
+
+			// The operator may have closed the terminal while the handshake ran; the
+			// shell then belongs to nobody, and the tab that would have shown it is not
+			// this attempt's any more.
+			if (!isCurrentTerminalAttempt(tab, attempt)) {
+				terminal.stop()
+				Terminals.running.remove(device.id)
+				return@launch
+			}
+
+			// A refused key gets the same second way in the Harness connect offers:
+			// one dialog, for a machine the operator was reaching for. The refusal is
+			// not always the sentence `isAuthFailure` knows — an sshd with a small
+			// `MaxAuthTries` answers a key it does not have with
+			// `SSH_MSG_DISCONNECT: 2 Too many authentication failures` instead of
+			// `Auth fail`, and that is still the key being refused, not a dead host.
+			val failure = tab.terminalError
+			val refused = isAuthFailure(failure) ||
+				failure?.contains("authentication failures", ignoreCase = true) == true
+			if (terminal.state == TerminalSession.State.FAILED && !usePassword &&
+				credential is Credential.PrivateKey && refused
+			) {
+				tab.terminal = null
+				Terminals.running.remove(device.id)
+				terminal.stop()
+				askPassword(device, getString(R.string.key_refused_password)) { entered ->
+					passwords[device.id] = entered
+					startTerminal(tab, entered, usePassword = true)
+				}
+			}
+			render()
+		}
+	}
+
+	/** True when [attempt] still owns [tab]'s terminal and [tab] is still in the bar. */
+	private fun isCurrentTerminalAttempt(tab: Tab, attempt: Token): Boolean =
+		tab.terminalAttempt === attempt && tabs.any { it === tab }
+
+	/** Bind a terminal that survived a window, so this window draws and hears it. */
+	private fun adoptTerminal(tab: Tab, terminal: TerminalSession) {
+		tab.terminal = terminal
+		tab.terminalState = terminal.state
+		tab.showTerminal = terminal.windowVisible && terminal.state == TerminalSession.State.RUNNING
+		terminal.onOutput = { text -> terminalViews[tab.device.id]?.write(text) }
+		terminal.onState = { state, detail -> onMain {
+			if (tabs.none { it === tab }) return@onMain
+			tab.terminalState = state
+			tab.terminalError = detail
+			if (state == TerminalSession.State.FAILED || state == TerminalSession.State.ENDED) {
+				Terminals.running.remove(tab.device.id)
+			}
+			render()
+		} }
+		terminal.onPresets = { availability -> onMain {
+			if (tabs.none { it === tab }) return@onMain
+			tab.presets = availability
+			render()
+		} }
+		Diag.log("terminal.adopt device=${tab.device.id} state=${terminal.state}")
+	}
+
+	/**
+	 * Draw one terminal: its renderer, its title, its status line and what can be typed.
+	 *
+	 * The renderer is created once per tab and then left alone, exactly as a Harness
+	 * page is: switching to another tab detaches it from the container without
+	 * destroying it, so coming back finds the same scrollback and the same selection.
+	 */
+	@MainThread
+	private fun renderTerminal(tab: Tab, terminal: TerminalSession) {
+		terminalHost.visibility = View.VISIBLE
+		webHost.visibility = View.GONE
+		panel.visibility = View.GONE
+		terminalTitle.text = getString(R.string.terminal_title, tab.device.display)
+
+		val renderer = terminalViews.getOrPut(tab.device.id) {
+			TerminalView(
+				context = this,
+				onInput = { data -> terminal.write(applyCtrl(data)) },
+				onResize = { cols, rows -> terminal.resize(cols, rows) },
+				onGone = {
+					onMain {
+						terminalViews.remove(tab.device.id)
+						render()
+					}
+				}
+			)
+		}
+		if (terminalWebHost.childCount != 1 || terminalWebHost.getChildAt(0) !== renderer.view) {
+			terminalWebHost.removeAllViews()
+			terminalWebHost.addView(
+				renderer.view,
+				FrameLayout.LayoutParams(
+					android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+					android.view.ViewGroup.LayoutParams.MATCH_PARENT
+				)
+			)
+		}
+		// Every render rebinds, and that is harmless: the shell's output goes to the
+		// renderer this window holds, and an adopted shell has just had its old
+		// callback replaced by the previous window's destroy.
+		terminal.onOutput = { text -> renderer.write(text) }
+		updateTerminalChrome(tab, terminal)
+		if (terminal.state == TerminalSession.State.RUNNING) renderer.fit()
+	}
+
+	@MainThread
+	private fun updateTerminalChrome(tab: Tab, terminal: TerminalSession) {
+		val state = tab.terminalState ?: terminal.state
+		val status = when (state) {
+			TerminalSession.State.CONNECTING -> getString(R.string.terminal_connecting, tab.device.display)
+			TerminalSession.State.RUNNING -> null
+			TerminalSession.State.FAILED -> getString(R.string.terminal_failed, tab.terminalError ?: "unknown error")
+			TerminalSession.State.ENDED -> getString(
+				R.string.terminal_ended,
+				tab.terminalError?.let { getString(R.string.terminal_ended_detail, it) } ?: ""
+			)
+		}
+		terminalStatus.text = status ?: ""
+		terminalStatus.visibility = if (status == null) View.GONE else View.VISIBLE
+		for ((view, preset) in listOf(presetPi to TerminalPresets.ALL[1], presetOpencode to TerminalPresets.ALL[2])) {
+			val enabled = tab.presets.isEnabled(preset)
+			view.isEnabled = enabled
+			view.alpha = if (enabled) 1f else 0.4f
+		}
+	}
+
+	/**
+	 * Mark a shell that died while the app was in the background.
+	 *
+	 * A shell channel does not have the Harness tab's exec-channel watchdog — the
+	 * reader thread reports an EOF, but a phone that was suspended is not running that
+	 * thread — so returning to the foreground asks the one question that is cheap:
+	 * is the channel still connected?
+	 */
+	private fun verifyRunningTerminals() {
+		var changed = false
+		for (tab in tabs) {
+			val terminal = tab.terminal ?: continue
+			if (terminal.state == TerminalSession.State.RUNNING && !terminal.isAlive) {
+				Diag.log("terminal.ended device=${tab.device.id} foundOnReturn=true")
+				tab.terminalState = TerminalSession.State.ENDED
+				tab.terminalError = null
+				Terminals.running.remove(tab.device.id)
+				changed = true
+			}
+		}
+		if (changed) render()
+	}
+
 	// ---------------------------------------------------------------- dialogs
 
 	private fun askPassword(device: Device, message: CharSequence? = null, onEntered: (String) -> Unit) {
@@ -1722,6 +2192,7 @@ class MainActivity : AppCompatActivity() {
 		val home = view.findViewById<EditText>(R.id.home)
 		val disconnect = view.findViewById<android.widget.Button>(R.id.disconnect)
 		val stopHost = view.findViewById<android.widget.Button>(R.id.stopHost)
+		val terminal = view.findViewById<android.widget.Button>(R.id.terminal)
 
 		// The key section is the same screen whether a machine is being added or
 		// edited, because the key belongs to the app rather than to a machine: one key
@@ -1807,6 +2278,9 @@ class MainActivity : AppCompatActivity() {
 		if (existing != null && existing.persistent) {
 			stopHost.visibility = View.VISIBLE
 		}
+		// A terminal does not need the Harness to be up — it is a shell of its own — so
+		// any existing machine offers one.
+		if (existing != null) terminal.visibility = View.VISIBLE
 
 		val builder = AlertDialog.Builder(this)
 			.setTitle(if (existing == null) R.string.add_title else R.string.edit_title)
@@ -1882,6 +2356,12 @@ class MainActivity : AppCompatActivity() {
 		// Attached after show() because dismissing the dialog is the last thing either
 		// stop does: the session or host has to be asked to end before the screen that
 		// asked goes away.
+		if (existing != null) {
+			terminal.setOnClickListener {
+				openTerminal(existing)
+				dialog.dismiss()
+			}
+		}
 		if (live) {
 			disconnect.setOnClickListener {
 				stopTab(tabs.indexOfFirst { it.device.id == existing?.id })
@@ -2078,6 +2558,13 @@ class MainActivity : AppCompatActivity() {
 			// in `startSession`.
 			val tab = tabs[at]
 			tab.stop()
+			// A terminal is its own ssh session, so removing the machine has to end
+			// that too — and a connect attempt for one, which this token invalidates.
+			tab.terminalAttempt = Token()
+			tab.terminal?.stop()
+			tab.terminal = null
+			Terminals.running.remove(device.id)
+			terminalViews.remove(device.id)?.destroy()
 			tabs.removeAt(at)
 		}
 		DeviceBook.mutate { stored -> stored.filterNot { it.id == device.id } }

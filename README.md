@@ -50,6 +50,7 @@ redirect, so every later reload uses the cookie rather than the URL.
 | **Teardown that reaps** | Closing a tab stops the remote `dsh web` on the far side instead of leaving it holding the machine's resources. |
 | **Survives leaving the app** | A foreground service keeps the connection alive while you are in another app. |
 | **A host that outlives the connection** | Tick **Persistent host** on a machine and its Harness keeps running when the tab closes, the app is killed or the network drops — the next connection adopts that same process instead of starting a second one, so every Session in that DSH home is the one you left. **Stop host** in the machine's dialog is the only control that ends it. |
+| **A terminal per machine** | Long-press a machine → **Terminal** opens an interactive shell over SSH: its own ssh session on a real pty, sized to the window, with `Ctrl`, `Esc`, `Tab`, arrows, copy and paste in a key bar because a soft keyboard has none of them. The agents the desktop client offers — **pi** and **opencode** — are buttons here too, run on the *connected* machine because the phone cannot run them. Closing the terminal ends only the shell; the Harness connection and its Sessions are untouched. |
 | **Survives a window resize** | Split screen, freeform and a folding device resize the window in place; if an OEM recreates the window instead, the new window adopts the live session — the page reloads, the connection does not drop. |
 | **Automatic reconnect** | If the remote server goes away — a plugin edit restarts it, for instance — the tab says so and reconnects on its own, within a bounded number of attempts. |
 | **A readable failure** | A connect that fails shows the far side's own words, not just "connection failed". |
@@ -162,6 +163,12 @@ answers, because a `403` and a timeout together say which side of the network br
   lives while a session is up: a tab has no buttons on it at all, so a tap aimed at one
   can only switch machines and never end a connection by accident. The tab stays after
   a disconnect, because it is a configured machine, not a transient view.
+- **Long-press → Terminal** opens a shell on that machine, over the Harness page.
+  `pi` and `opencode` type those commands on the **far** side, and a command the far
+  side says it does not have is greyed out. **Web** goes back to the Harness page
+  without ending the shell; **Close** ends the shell only. The key bar above the
+  keyboard has `Ctrl` (it latches for the next key), `Esc`, `Tab`, arrows, **Copy**
+  (the selection) and **Paste** (the clipboard) because a soft keyboard has none of them.
 
 ## Documentation
 
@@ -231,6 +238,7 @@ URL。
 | **主机密钥固定** | 首次信任，之后每次连接都校验。主机密钥变了会被拒绝并告知，而不是默默接受。 |
 | **关得干净** | 关标签页会停掉远端的 `dsh web`，不会留下进程占着那台机器的资源。 |
 | **切出去也不断** | 前台服务让连接在你用别的应用时保持存活。 |
+| **每台机器一个终端** | 长按机器 → **Terminal**，开一个自己独立的 SSH 交互 shell（真 pty、跟随窗口大小）；`Ctrl`、`Esc`、`Tab`、方向键、复制粘贴在软键盘上方的一条键条里，因为软键盘没有这些键。桌面端本地终端提供的 **pi** / **opencode** 在这里也是按钮，但跑在**被连的那台机器**上 —— 手机跑不了它们。关终端只结束这个 shell，Harness 连接和它的会话不受影响。 |
 | **分屏不重连** | 分屏、小窗、折叠设备只是改变窗口大小；即使 OEM 重建窗口，新窗口也会接管活着的连接 —— 页面会重新加载，但连接不断。 |
 | **自动重连** | 远端服务消失时（比如改插件导致它重启），标签页会说原因并自行重连，重试次数有上限。 |
 | **失败能读懂** | 连接失败会显示对端自己的原话，而不是只给一句"连接失败"。 |
@@ -313,6 +321,11 @@ NAT、卖给很多人的代理出口、办公室网络。应用只有一条路�
 - **长按标签页**编辑或删除这台机器；连接还在时，**断开**也在这个对话框里。标签页上现在
   一个按钮都没有，所以点到标签页只会切换机器，不会误断开连接。断开后标签页仍然保留 ——
   标签页是一台配置好的机器，不是临时视图。
+- **长按 → Terminal** 在那台机器上开一个 shell，覆盖在 Harness 页面上。`pi` / `opencode`
+  按钮会在**对端**敲这两个命令，对端明确说没有的会被置灰。**Web** 回到 Harness 页面但
+  shell 继续跑；**Close** 只结束这个 shell。软键盘上方那条键条里有 `Ctrl`（为下一个键
+  锁存一次）、`Esc`、`Tab`、方向键、**Copy**（选区）和 **Paste**（剪贴板），因为软键盘
+  没有这些键。
 
 ## 文档
 
@@ -505,19 +518,92 @@ mechanisms are in play and are easy to conflate:
   This does **not** substitute for the policy above: a loopback page can be a
   secure context and still be refused.
 
+### A terminal is its own ssh session, with xterm.js in a WebView
+
+**Why a second connection.** The Harness tab's session has an owner with opinions: its
+exec-channel watchdog turns a tab into something the operator can act on when the far
+side's server ends, and a reconnect replaces the server. A shell attached to that
+lifetime would die whenever the Harness restarted — and the Harness restarting is
+exactly when an operator is most likely to be in a shell, looking at what broke. So a
+terminal opens its **own** SSH session, the way the desktop client opens one `ssh -tt`
+per terminal, and the two are independent: `×` on the tab does not close the shell, and
+`Close` on the shell does not touch the Harness.
+
+**One way to build a session.** The transport was extracted into `Ssh.kt` and both
+`RemoteSession` and `TerminalSession` call it. That is not tidiness: the three things
+that must not differ between two connections to the same machine are *which host key is
+accepted* (`TrustOnFirstUse`, changed keys refused), *which credential methods are
+offered* (`password,keyboard-interactive,publickey` for a password; `publickey` for a
+key), and *what keeps the socket alive* (JSch's keepalive is in **milliseconds**, and a
+literal 20 is fifty pings a second, not one every twenty seconds). A second, hand-rolled
+session setup would have been a second security model reachable from the same device
+record.
+
+**The pty is the point.** `ChannelShell` with `setPtyType("xterm-256color")` and
+`setPtySize(cols, rows, 0, 0)`, set **before** `connect()`, and the streams asked for
+before it too — JSch's ordering rule, the same one the Harness connect documents. A pipe
+would give a shell that wraps at 80 columns for ever and refuse full-screen programs; the
+pty is what makes `vim`, a progress bar and `Ctrl-C` behave.
+
+**Rendering is xterm.js, not a native emulator.** The desktop client already renders its
+terminals with xterm.js, and reimplementing the VT parser for Android is the part of a
+terminal an operator notices least when it is right and most when it is wrong. The page
+is a local asset; the bridge gives JavaScript three functions — output in, input out,
+the size the fit addon computed out — plus copy/paste. Output is **coalesced** at one
+frame (16 ms) and the undrawn queue keeps its *tail* at 256 KB, because a build log is
+thousands of reads and tab nobody is looking at must not grow without bound.
+
+**UTF-8 is decoded across chunk boundaries.** A pty splits a multi-byte character
+whenever it likes, and decoding each read on its own puts `�` in the middle of a Chinese
+character in a build log. `Utf8Chunker` holds the incomplete tail until the next read,
+decodes invalid bytes with the platform's replacement so a broken stream cannot stall,
+and is covered by JVM tests for the two-, three- and four-byte cases.
+
+**The soft keyboard has no `Ctrl`, no `Esc` and no arrows.** The key bar writes exactly
+the bytes xterm would for those keys, and `Ctrl` latches for the next key — the way the
+key on a real keyboard behaves. **Copy** asks the page for the selection and puts it in
+the phone's clipboard; **Paste** sends the clipboard into the shell as input.
+
+**The presets are command names, run on the far side.** `pi` and `opencode` are installed
+where the work is — the phone cannot run them — so the buttons type their names into the
+shell. Each is probed with `command -v` (POSIX) or `where` (Windows) on the same session,
+and only an explicit "not found" greys a button out: an unanswered probe leaves it
+enabled, because hiding a feature on a failed probe is how an operator concludes it does
+not exist.
+
+**What a window recreate can and cannot keep.** A WebView cannot outlive its activity, so
+the renderer goes with it; the shell does not. `Terminals` is the same registry the
+Harness sessions use, the next window adopts the shell and rebinds its output, and the
+scrollback is the one thing that is lost — the process, the pty and everything running
+in it are untouched. The foreground service stays up while `Sessions` **or** `Terminals`
+holds anything.
+
+**What a terminal is not.** It is the account's own login shell: exactly the access the
+SSH account already has, no more and no less. Host keys are pinned by the same store,
+and a password is held for the run only. A terminal is not a way around the rest of the
+app's rules; it is a way to use the same rules interactively.
+
 ## Layout
 
 ```
 app/src/main/java/dev/dshtabs/
   Remote.kt          what to run on the far side — a port of the desktop app's remote.js
   RemoteSession.kt   one SSH session: run the server, forward a port, tear down
+  Ssh.kt             one authenticated session, built the one way both kinds use
+  Terminal.kt        a shell channel on a pty, its agents and its key encodings
+  TerminalView.kt    xterm.js in a WebView: output batching, resize, the JS bridge
   HostKeys.kt        trust on first use, then pinning
   Device.kt          the machine record and its book
-  MainActivity.kt    the tab bar and the one WebView
+  MainActivity.kt    the tab bar, the Harness pages and the terminal
   SessionService.kt  keeps a session alive with the screen off
   Notifications.kt   the one notification this app posts
   App.kt             start-up: where the book lives, and the notification channel
 ```
+
+`app/src/main/assets/terminal/` carries **xterm.js 6.0.0** and its fit addon, both
+MIT and both vendored: the terminal page is a local asset and the app has no network
+dependency to fetch a renderer from. The Kotlin side never parses an escape sequence;
+it moves bytes and tells the pty how wide the window is.
 
 `Remote.kt` is a **port**, and its comments were ported with it, because each one
 records a failure that was paid for once already.
@@ -1251,6 +1337,28 @@ Not settled on a device, and why:
 - **The renderer dying** — `adb shell kill` on the WebView's sandboxed process answers
   `Operation not permitted`, so it has to happen naturally under memory pressure.
 
+### On the emulator, 2026-11-27 (terminal, Pixel Tablet AVD, Android 15, release build)
+
+The terminal was driven end to end from the release APK against a real `sshd` on the
+build machine — a temporary ordinary account on host loopback (`10.0.2.2` from the
+emulator), with a password and no key — and every claim was read off the screen:
+
+| Step | What the screen showed |
+| --- | --- |
+| Long-press the machine → **Terminal** | the no-key form first: *"This machine has no SSH key on it yet, so it needs a password."* — not a failed connect |
+| After the password | a live `PowerShell 7.6.10` prompt in the tab, in a pty, with the tab marked `·T` |
+| `echo terminal-ok` | the command echoed with its output under it, and a new prompt |
+| `ping -t 10.0.2.2`, then **Ctrl** + `c` | the running command stopped with `Control-C` and the prompt returned — the latched Ctrl reached the pty as `0x03` |
+| The `pi` / `opencode` buttons | greyed out: the account does not have either program, and the probe said so |
+| **Web** | the Harness panel with CONNECT, the tab still marked `·T`, and the shell alive |
+| Long-press → **Terminal** again | the same shell, scrollback intact — no second session, no password |
+| **Close** | the panel again, marker gone — the shell ended and nothing else did |
+| With the soft keyboard up | the preset row and the key bar sat **above** the keyboard (the IME inset) |
+
+The screenshots are `.shots/terminal-echo.png`, `.shots/terminal-ime.png`,
+`.shots/terminal-ctrlc.png` and `.shots/terminal-closed.png` (kept out of the
+repository by `.gitignore`, like the other capture runs).
+
 ## When the remote server ends by itself
 
 The whole client rests on one assumption: while the SSH session is up, so is the
@@ -1711,3 +1819,12 @@ harness-reuse change in the known gaps.
   The tab says what happened and offers Try again, deliberately: a page that killed a
   renderer once will do it again, and an automatic loop is worse than a button.
   Nothing here can stop the *page* from being the thing that exhausts memory.
+- **A terminal's scrollback does not survive a window recreation.** The shell does:
+  it lives in `Terminals` — the same registry idea as `Sessions` — so a split-screen
+  relaunch comes back to a live shell. What cannot outlive the activity is the WebView
+  that renders it, so the screen comes back empty; the process, the pty and everything
+  running in it are untouched.
+- **A terminal always renders dark, in both themes.** The shell around it follows the
+  system setting; xterm's palette is the desktop client's and is deliberately the same
+  in both modes. What an operator reads on a terminal — a diff, a build log — is
+  written for a terminal, not for a UI theme.

@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+	The terminal page.
+
+	Everything here is local: xterm.js and its fit addon are bundled in this
+	directory, and no network content is ever loaded into this view. The page has one
+	job — create the terminal, size it to the view, and hand its input and its
+	resizes to `terminal.js`, which forwards them to `DshTerminal` (the Kotlin bridge).
+
+	`user-scalable=no` is deliberate: a pinch-zoom inside a terminal changes the
+	viewport without telling the pty, so the shell keeps formatting for a width nobody
+	can see. The app's own text size setting is the zoom control operators get.
+-->
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+	<link rel="stylesheet" href="xterm.css">
+	<style>
+		html, body {
+			margin: 0;
+			padding: 0;
+			height: 100%;
+			background: #15161b;
+			overflow: hidden;
+		}
+		#terminal {
+			position: absolute;
+			inset: 0;
+			padding: 6px;
+			box-sizing: border-box;
+		}
+		.xterm {
+			height: 100%;
+		}
+	</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script src="terminal.js"></script>
+</body>
+</html>

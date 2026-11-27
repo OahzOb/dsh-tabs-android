@@ -118,6 +118,19 @@
 			android:importantForAutofill="no"
 			android:inputType="text" />
 
+		<!-- A terminal needs the machine to exist, not its Harness to be up: the shell
+		     is its own ssh session with its own pty. Only an existing machine gets the
+		     control, and it is not destructive — closing the terminal ends only that
+		     shell. -->
+		<Button
+			android:id="@+id/terminal"
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="10dp"
+			android:minHeight="48dp"
+			android:text="@string/terminal_open"
+			android:visibility="gone" />
+
 		<!-- Only a machine with a session up shows this: ending a connection that is
 		     not running would be a red button that teaches the operator nothing. -->
 		<Button
