@@ -18,7 +18,8 @@ is simpler than the desktop one rather than a port of it.
    Node. The packaged Desktop application does *not* count: it ships its Harness
    inside `app.asar` and installs no `dsh` command.
 2. **On the phone:** install the app, tap **`+`**, fill in host, user and — until the
-   app's key is on that machine — a password.
+   app's key is on that machine — a password. (A machine that refuses the app's key
+   asks for its password instead of failing outright.)
 3. **Tap the tab** to connect. The Harness's web interface opens in the tab.
 
 Do that once per machine and the tab bar remembers them.
@@ -42,7 +43,7 @@ redirect, so every later reload uses the cookie rather than the URL.
 | --- | --- |
 | **Several machines at once** | A tab per machine, each with its own SSH session, WebView and conversation. Switching tabs changes visibility and nothing else — the page is never reloaded, so a conversation is still there when you come back. **Connecting is the CONNECT button's job**: a tap on a tab selects it and never dials out. |
 | **No Harness on the phone** | Nothing is installed on the target machine and nothing runs locally. The app starts the far side's own `dsh web` and forwards its port. |
-| **SSH key, or a password** | Generate the app's key once and paste one line into `authorized_keys`, or use a password for a one-off connection. A password is never stored. |
+| **SSH key, or a password** | Generate the app's key once and paste one line into `authorized_keys`, or use a password for a one-off connection. A machine that **refuses** the key asks for its password instead — the key is one key for every machine, so this is what keeps a host it was never pasted into reachable. A password is never stored: it is held for this run only. |
 | **Host keys are pinned** | Trust on first use, then verified on every later connect. A changed host key is refused, and you are told, rather than silently accepted. |
 | **Teardown that reaps** | Closing a tab stops the remote `dsh web` on the far side instead of leaving it holding the machine's resources. |
 | **Survives leaving the app** | A foreground service keeps the connection alive while you are in another app. |
@@ -143,11 +144,13 @@ answers, because a `403` and a timeout together say which side of the network br
 ## Using it
 
 - **`+`** adds a machine. It needs a host, an SSH user, and — until the app's key is
-  on that machine — a password. A password is used for that connection and is
-  **never stored**; a wrong one is asked for again rather than retried.
+  on that machine — a password. A password is used for this run and is **never
+  stored**; a wrong one is asked for again rather than retried.
 - **SSH key…** in the same dialog generates the app's own key and shows the line to
-  paste into that machine's `authorized_keys`. Once a machine has it, connecting
-  never asks for anything.
+  paste into that machine's `authorized_keys`. A machine that has it never asks for
+  anything; a machine that **refuses** it — the key was never pasted there, or the
+  username is wrong — asks for a password instead, because the app holds one key for
+  every machine and rotating it to reach one host would break all the others.
 - **Tap a tab** to select it; the panel's **Connect** starts the connection. A stray
   tap on a sleeping tab does not dial out.
 - **`×`** disconnects, and it appears only on the **selected** tab — switching tabs
@@ -594,7 +597,7 @@ A checkout of this repository on its own still works: the test falls back to a
 says which path it looked in rather than passing with nothing to compare.
 
 ```
-gradle testDebugUnitTest      # 55 checks, on the build machine, no device needed
+gradle testDebugUnitTest      # 85 checks, on the build machine, no device needed
 ```
 
 POSIX and Windows are both held to exact bytes. Windows used to be held to something
@@ -1044,6 +1047,42 @@ com.jcraft.jsch.JSchException: USERAUTH fail                                ← 
 `USERAUTH fail` with no `for methods` suffix is the narrower message: it means a key
 was actually presented. The longer one is the ambiguous case, and the server log is
 the only thing that separates them.
+
+## A refused key asks for a password, and keyboard-interactive is not `setPassword`
+
+Two gaps in "use a password when there is no key" were real enough to fix together.
+
+**The first is that one key is every machine's key.** The app generates *one* key and
+expects it in as many `authorized_keys` files as the operator likes, so once it exists
+every device tries it first. A host where it was never pasted therefore failed on the
+key for ever, and the only way out was replacing the key — which breaks every machine
+that did have it. The app now treats a **refused** key as a reason to offer the other
+method: `isAuthFailure` matches `Auth fail` and `Permission denied` and nothing else,
+and only when the credential that failed was a `PrivateKey`. The operator gets one
+password dialog, the password is held for the run, and the key is left untouched.
+
+The narrow match matters. A timeout, a closed connection or a host-key mismatch does
+not mean the credential was wrong, so none of them may throw away a password or ask
+for one — the operator would be retyping a secret the far side never received. The
+same rule clears a password only when the attempt that failed was actually a
+`Credential.Password`, which is why `startSession` keeps `credentialUsed` rather than
+guessing from the error text after the fact.
+
+**The second is that JSch's `setPassword` does not answer every password prompt.**
+It feeds the `password` method. The `keyboard-interactive` method is a different
+authentication, and `UserAuthKeyboardInteractive` reads its answers from
+`session.getUserInfo()`; with no `UserInfo` it fails `USERAUTH fail` even when the
+password is correct. That arrangement is not exotic: a Debian or Ubuntu host with
+`KbdInteractiveAuthentication yes` and `PasswordAuthentication no` — the usual PAM
+setup — offers *only* keyboard-interactive. The app already listed the method in
+`PreferredAuthentications`, so it was advertising a method it could not complete.
+
+`PasswordUserInfo` is the fix: it answers `promptKeyboardInteractive` with the one
+secret, once per question, and `promptPassword` the same way. It deliberately answers
+`promptYesNo` with **false** — that prompt is a host-key question, and accepting one
+would undo `TrustOnFirstUse` — and it keeps `getPassphrase` null, because a password
+credential has no passphrase. `AuthTest` pins both the answers and the narrow
+definition of an authentication failure.
 
 ## Diagnosing a connection
 

@@ -358,6 +358,9 @@ class RemoteSession private constructor(
 						put("ServerAliveCountMax", "3")
 					})
 					if (credential is Credential.Password) setPassword(credential.secret)
+					// A host that offers only keyboard-interactive takes its answers from
+					// `UserInfo`, not from `setPassword`; see `PasswordUserInfo`.
+					if (credential is Credential.Password) setUserInfo(PasswordUserInfo(credential.secret))
 					connect(CONNECT_TIMEOUT_MS)
 					timeout = 0
 				}
@@ -466,6 +469,9 @@ class RemoteSession private constructor(
 							System.setProperty("jsch.keepalive.message", "true")
 						})
 						if (credential is Credential.Password) setPassword(credential.secret)
+						// Keyboard-interactive reads its answers from `UserInfo`; without
+						// this, a PAM-only host refuses a correct password with `Auth fail`.
+						if (credential is Credential.Password) setUserInfo(PasswordUserInfo(credential.secret))
 						// **`timeout` is not a connect timeout.** JSch uses this field as
 						// the socket's SO_TIMEOUT for the whole life of the session, so a
 						// value set here disconnects a perfectly healthy but quiet session

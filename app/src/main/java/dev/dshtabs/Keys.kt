@@ -171,11 +171,20 @@ object Keys {
 	 * anything — and one that has not will fail the key attempt and say so in the
 	 * transcript, which is more useful than silently falling back to a prompt.
 	 *
-	 * @param typedPassword what the operator entered, used only when there is no key.
+	 * **`usePassword` overrides that preference, deliberately.** The key is one key
+	 * for every machine: once it has been generated, every device tries it first, and
+	 * a machine where it was never pasted would otherwise be unreachable from this app
+	 * for ever — there is no way to say "not this machine's key". So a refused key
+	 * asks for a password and connects with it for the rest of the run, and this flag
+	 * is what stops `credentialFor` from handing the same refused key back.
+	 *
+	 * @param typedPassword what the operator entered, used only when there is no key,
+	 *   or when `usePassword` is true.
+	 * @param usePassword true to authenticate with the password even if a key exists.
 	 */
-	fun credentialFor(typedPassword: String?): Credential {
+	fun credentialFor(typedPassword: String?, usePassword: Boolean = false): Credential {
 		val secret = passphrase()
-		if (exists() && secret != null) return Credential.PrivateKey(privateKeyFile().readBytes(), secret)
+		if (!usePassword && exists() && secret != null) return Credential.PrivateKey(privateKeyFile().readBytes(), secret)
 		return Credential.Password(typedPassword.orEmpty())
 	}
 

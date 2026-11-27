@@ -32,11 +32,12 @@
 	<string name="edit_title">Edit this machine</string>
 	<string name="remove_confirm">Remove this machine? Its tab and any connection are dropped. Nothing on the machine itself is touched.</string>
 	<string name="need_password">This machine has no SSH key on it yet, so it needs a password.</string>
+	<string name="key_refused_password">This machine refused the app\'s SSH key. Enter its password instead — the key is left as it is, and this password is used for this run only.</string>
 
 	<!-- the key dialog -->
 	<string name="key_manage">SSH key…</string>
 	<string name="key_none">No key yet. Connections use a password.</string>
-	<string name="key_ready">A key is ready. Connections use it and never ask for a password.</string>
+	<string name="key_ready">A key is ready. Connections try it first; a machine that refuses it asks for a password instead.</string>
 	<string name="key_title">This app\'s SSH key</string>
 	<string name="key_generate">Generate a key</string>
 	<string name="key_copy">Copy the public key</string>

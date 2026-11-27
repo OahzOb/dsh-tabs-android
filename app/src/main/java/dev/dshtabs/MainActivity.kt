@@ -1264,6 +1264,16 @@ class MainActivity : AppCompatActivity() {
 	private fun maybeConnect(index: Int) {
 		val tab = tabs.getOrNull(index) ?: return
 
+		// **A password this run already knows wins over the key.** It is the answer the
+		// far side accepted — either there is no key, or the key was refused and the
+		// operator supplied a password — and asking again on every reconnect would be
+		// the wrong side of "once per run".
+		val password = passwords[tab.device.id]
+		if (password != null) {
+			startSession(index, password, usePassword = true)
+			return
+		}
+
 		// A key, when the app has one, replaces the prompt entirely — that is the
 		// whole point of having generated it. A password is asked for only when
 		// there is no key, and then held for the run rather than stored.
@@ -1272,15 +1282,10 @@ class MainActivity : AppCompatActivity() {
 			return
 		}
 
-		val password = passwords[tab.device.id]
-		if (password == null) {
-			askPassword(tab.device) { entered ->
-				passwords[tab.device.id] = entered
-				startSession(index, entered)
-			}
-			return
+		askPassword(tab.device) { entered ->
+			passwords[tab.device.id] = entered
+			startSession(index, entered)
 		}
-		startSession(index, password)
 	}
 
 	/**
@@ -1333,7 +1338,7 @@ class MainActivity : AppCompatActivity() {
 			// server that is still shutting down just fails again, and each failure costs
 			// the operator another few seconds of not knowing.
 			delay(RECONNECT_DELAY_MS)
-			startSession(index, passwords[tab.device.id], isReconnect = true)
+			startSession(index, passwords[tab.device.id], isReconnect = true, usePassword = passwords[tab.device.id] != null)
 		}
 	}
 
@@ -1352,7 +1357,7 @@ class MainActivity : AppCompatActivity() {
 	 * @param isReconnect true when this attempt follows the server going away, which
 	 *   keeps the tab in a state that says so instead of clearing the explanation.
 	 */
-	private fun startSession(index: Int, secret: String?, isReconnect: Boolean = false) {
+	private fun startSession(index: Int, secret: String?, isReconnect: Boolean = false, usePassword: Boolean = false) {
 		val tab = tabs.getOrNull(index) ?: return
 		Diag.log("connect.start device=${tab.device.id} reconnect=$isReconnect")
 		tab.stop()
@@ -1376,18 +1381,25 @@ class MainActivity : AppCompatActivity() {
 
 		tab.connectJob = lifecycleScope.launch {
 			var opened: RemoteSession? = null
+			// What this attempt actually authenticated with. The failure branch needs it:
+			// a refused *key* is the case a password can rescue, and a refused password
+			// is the case to forget — and after `RemoteSession.open` returns there is
+			// nothing left to ask.
+			var credentialUsed: Credential? = null
 			try {
+				// The keystore and the key file are read here, on `Dispatchers.IO` —
+				// `RemoteSession.open` switches to IO itself, and this argument is
+				// evaluated before it does. Measured cost of getting that wrong: on the
+				// main thread this is `EncryptedSharedPreferences` → `MasterKey` →
+				// AndroidKeyStore decryption plus a private-key file read, on every
+				// connect, on the thread that is drawing the tab bar. `Keys` is where
+				// that work is defined; the README's threading section is why it is
+				// spelled out rather than left to the reader.
+				val credential = withContext(Dispatchers.IO) { Keys.credentialFor(secret, usePassword) }
+				credentialUsed = credential
 				val result = RemoteSession.open(
 					device = tab.device,
-					// The keystore and the key file are read here, on `Dispatchers.IO` —
-					// `RemoteSession.open` switches to IO itself, and this argument is
-					// evaluated before it does. Measured cost of getting that wrong: on the
-					// main thread this is `EncryptedSharedPreferences` → `MasterKey` →
-					// AndroidKeyStore decryption plus a private-key file read, on every
-					// connect, on the thread that is drawing the tab bar. `Keys` is where
-					// that work is defined; the README's threading section is why it is
-					// spelled out rather than left to the reader.
-					credential = withContext(Dispatchers.IO) { Keys.credentialFor(secret) },
+					credential = credential,
 					// `onLine` does **not** run on the main thread: the connect runs on
 					// Dispatchers.IO, so every transcript line arrives from a worker, and
 					// touching a view from there throws CalledFromWrongThreadException and
@@ -1493,8 +1505,29 @@ class MainActivity : AppCompatActivity() {
 							Diag.log("connect.fail device=${tab.device.id} error=${result.error.take(160)}")
 							// A failed password is very likely wrong rather than stale, so
 							// forget it and ask again next time instead of retrying the same
-							// string.
-							passwords.remove(tab.device.id)
+							// string. A failed *key* is not a wrong password, and forgetting
+							// one that was never used would be confusing rather than helpful.
+							if (credentialUsed is Credential.Password) passwords.remove(tab.device.id)
+							// **A refused key needs an offer of the other method.** The app
+							// has one key for every machine, so once it has been generated a
+							// host where it was never pasted fails on the key for ever, and
+							// the only way out used to be rotating the key — which breaks
+							// every machine that did have it. Asking for a password after an
+							// authentication refusal is the narrow fix: one dialog, for a
+							// machine the operator was trying to reach, and only when the
+							// failure is a refusal rather than a timeout or a changed key.
+							//
+							// Not on a reconnect: that attempt was not asked for by the
+							// operator, and a dialog over whatever they are doing would be a
+							// surprise. The next tap on Connect reaches this same branch.
+							if (!usePassword && !isReconnect && credentialUsed is Credential.PrivateKey &&
+								isAuthFailure(result.error)
+							) {
+								askPassword(tab.device, getString(R.string.key_refused_password)) { entered ->
+									passwords[tab.device.id] = entered
+									startSession(index, entered, usePassword = true)
+								}
+							}
 							// **A failed reconnect is not the end of the budget.** The server may
 							// still be coming up — an agent editing a plugin restarts it — so the
 							// count stands and `reconnect` schedules another attempt until the
@@ -1625,7 +1658,7 @@ class MainActivity : AppCompatActivity() {
 			} else {
 				// No live feedback while it runs: the program prints a line or two and the
 				// list below is what is kept, so a streaming callback would only duplicate it.
-				RemoteSession.stopHost(device, Keys.credentialFor(passwords[device.id]))
+				RemoteSession.stopHost(device, Keys.credentialFor(passwords[device.id], usePassword = passwords[device.id] != null))
 			}
 			tab?.state = State.IDLE
 			tab?.lines = tab?.lines.orEmpty() + said.map { "[stop] $it" }
@@ -1662,14 +1695,17 @@ class MainActivity : AppCompatActivity() {
 
 	// ---------------------------------------------------------------- dialogs
 
-	private fun askPassword(device: Device, onEntered: (String) -> Unit) {
+	private fun askPassword(device: Device, message: CharSequence? = null, onEntered: (String) -> Unit) {
 		val field = EditText(this).apply {
 			inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
 			hint = getString(R.string.field_password)
 		}
 		AlertDialog.Builder(this)
 			.setTitle(device.user + "@" + device.host)
-			.setMessage(R.string.need_password)
+			// Two reasons lead here and they are not the same sentence: a machine with no
+			// key, and a machine that refused the key. Saying the first when the second
+			// is true sends the operator to install a key that is already there.
+			.setMessage(message ?: getString(R.string.need_password))
 			.setView(field)
 			.setPositiveButton(R.string.connect) { _, _ -> onEntered(field.text.toString()) }
 			.setNegativeButton(R.string.cancel, null)
@@ -1855,6 +1891,13 @@ class MainActivity : AppCompatActivity() {
 		val generate: suspend (android.content.DialogInterface, Int) -> Unit = { _, _ ->
 			try {
 				Keys.generate()
+				// **A new key is the operator choosing the key path again.** Cached
+				// passwords would otherwise win over it for the rest of the run (see
+				// `maybeConnect`), and a machine that had been reached with a password
+				// would keep asking for one after the key that works was installed. A
+				// machine that refuses the new key asks for a password again, which is
+				// the honest answer.
+				passwords.clear()
 				toast(getString(R.string.key_generated))
 			} catch (error: Throwable) {
 				toast(getString(R.string.key_cannot_generate, error.message ?: error.javaClass.simpleName))
