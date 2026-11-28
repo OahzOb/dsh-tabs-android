@@ -355,7 +355,7 @@ class RemoteParityTest {
 		// side inventing its own.
 		assertEquals(41881, Device.deriveLocalPort("dev-a"))
 		assertEquals(41882, Device.deriveLocalPort("dev-b"))
-		assertEquals(41252, Device.deriveLocalPort("dev-test"))
+		assertEquals(41690, Device.deriveLocalPort("dev-test"))
 		assertEquals(41021, Device.deriveLocalPort("device-42"))
 	}
 

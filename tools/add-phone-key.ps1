@@ -3,8 +3,9 @@
 #
 #     Start-Process powershell -Verb RunAs -ArgumentList '-ExecutionPolicy Bypass -File "<path to this file>"'
 #
-# The app has **one key per device**, so a second Android device needs its own public
-# key added here too. Pass it with -Key; with no argument the phone's key is added.
+# The app has **one key per device**, so every Android device needs its own public key
+# added here. Pass it with -Key; the key is required, because a real key has no place
+# in a tracked file.
 #
 # Why it needs elevation, and why the obvious file is the wrong one:
 #
@@ -27,10 +28,14 @@
 # changed. The log says which file was written, which lines it holds, and what the ACL
 # is afterwards, so a failure can be diagnosed from a normal prompt.
 
-# The key to add. Pass one with -Key, or leave it off to add the phone's key.
+# The key to add. There is no default: the key belongs to a device, not to this file.
 param(
-	[string]$Key = '<public key> dsh-tabs-android'
+	[string]$Key = ''
 )
+
+if ([string]::IsNullOrWhiteSpace($Key)) {
+	throw 'Pass the device''s public key with -Key; this script carries no default.'
+}
 
 $log = Join-Path $env:TEMP 'dsh-add-phone-key.log'
 Start-Transcript -Path $log -Force | Out-Null
