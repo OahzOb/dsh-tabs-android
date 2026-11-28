@@ -2217,6 +2217,19 @@ class MainActivity : AppCompatActivity() {
 			if (address.label != null) "${address.label}=${address.host}" else address.host
 		})
 
+		// The one action that makes "one address per line" discoverable without the
+		// operator already knowing it: it appends a line and puts the cursor there.
+		// It invents nothing — an empty field just gets focus, and the save still
+		// parses the field the same way.
+		view.findViewById<TextView>(R.id.addressAddLine).setOnClickListener {
+			val text = addressesField.text.toString()
+			if (text.isNotEmpty() && !text.endsWith("\n")) {
+				addressesField.setText("$text\n")
+				addressesField.setSelection(addressesField.text.length)
+			}
+			addressesField.requestFocus()
+		}
+
 		// The choice control is "auto" plus one entry per address. `choiceNames`
 		// mirrors the adapter: index 0 is the AUTO sentinel, the rest are host names.
 		val choiceNames = mutableListOf<String>()

@@ -30,6 +30,32 @@
 			android:importantForAutofill="no"
 			android:inputType="text" />
 
+		<!--
+			The address rule lives in a **permanent caption**, not in the field's hint.
+			A hint is gone the moment the field has anything in it, and "one per line"
+			is the one thing this field cannot say for itself: an operator who has
+			typed the first address sees a text box that looks finished. The caption
+			stays, the example stays in the empty field, and the action under it exists
+			so that "add another address" is a thing one can find without already
+			knowing the answer.
+		-->
+		<TextView
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="12dp"
+			android:text="@string/addresses_title"
+			android:textColor="@color/fg"
+			android:textSize="13sp"
+			android:textStyle="bold" />
+
+		<TextView
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="2dp"
+			android:text="@string/addresses_how"
+			android:textColor="@color/dim"
+			android:textSize="11sp" />
+
 		<EditText
 			android:id="@+id/addresses"
 			android:layout_width="match_parent"
@@ -42,6 +68,30 @@
 			android:minLines="3"
 			android:scrollbars="vertical"
 			android:singleLine="false" />
+
+		<TextView
+			android:id="@+id/addressAddLine"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="2dp"
+			android:background="?android:attr/selectableItemBackground"
+			android:clickable="true"
+			android:focusable="true"
+			android:minHeight="44dp"
+			android:gravity="center_vertical"
+			android:paddingStart="4dp"
+			android:paddingEnd="12dp"
+			android:text="@string/address_add_line"
+			android:textColor="@color/accent"
+			android:textSize="12sp" />
+
+		<TextView
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="2dp"
+			android:text="@string/addresses_example"
+			android:textColor="@color/dim"
+			android:textSize="11sp" />
 
 		<TextView
 			android:layout_width="match_parent"

@@ -25,8 +25,14 @@
 
 	<!-- the device dialog -->
 	<string name="field_label">label (e.g. box-b)</string>
-	<string name="field_addresses">addresses, one per line (first is primary)\nlabel=host or just host</string>
-	<string name="address_hint">Every line reaches the same machine. The first line is the primary address that older clients use. In auto mode the app tries LAN addresses first, then the rest; picking one below remembers that address in the device book.</string>
+	<!-- The caption above the field says the rule; the hint is the example, because
+	     a hint disappears as soon as the operator types and the rule must not. -->
+	<string name="addresses_title">Addresses</string>
+	<string name="addresses_how">One address per line. The first line is the primary address.</string>
+	<string name="address_add_line">+ Add another address</string>
+	<string name="addresses_example">e.g. 192.168.1.10 on the first line, Tailscale=100.64.0.12 on the next</string>
+	<string name="field_addresses">192.168.1.10\nTailscale=100.64.0.12</string>
+	<string name="address_hint">Every line reaches the same machine. In auto mode the app tries LAN addresses first, then the rest; picking one below remembers that address in the device book.</string>
 	<string name="address_choice_auto">Auto: LAN first, then the rest</string>
 	<string name="address_choice_manual">Use %1$s</string>
 	<string name="address_required">At least one address is required</string>
