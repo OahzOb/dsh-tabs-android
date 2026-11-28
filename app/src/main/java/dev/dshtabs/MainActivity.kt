@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import kotlin.coroutines.resume
 
@@ -2676,23 +2677,54 @@ class MainActivity : AppCompatActivity() {
 	 * dismissing the system installer once no longer makes the next check fetch the
 	 * whole APK again.
 	 *
+	 * **The notes are shown in the device's language.** Releases are published with an
+	 * English half and a Chinese half in one body; showing the body verbatim put the
+	 * English half in front of a Chinese phone, and the dialog's 4 000-character cap
+	 * often cut the Chinese half off entirely. [ReleaseNotes] picks the half, and when
+	 * there are two a neutral button switches between them without leaving the offer.
+	 *
 	 * @param update - the release the check found.
+	 * @param chinese - which half to show, or null to choose by the device language.
 	 */
-	private fun showUpdate(update: Updates.Available) {
+	private fun showUpdate(update: Updates.Available, chinese: Boolean? = null) {
 		if (isFinishing || isDestroyed) return
+		val sections = ReleaseNotes.split(update.notes)
+		val showingChinese = chinese
+			?: (sections.switchable && ReleaseNotes.isChinese(Locale.getDefault().language))
 		lifecycleScope.launch {
 			val ready = Updates.cached(this@MainActivity, update.version)
 			if (isFinishing || isDestroyed) return@launch
-			val notes = update.notes.take(4000).ifBlank { getString(R.string.update_no_notes) }
+			val notes = sections.forLanguage(if (showingChinese) "zh" else "en")
+				.take(4000)
+				.ifBlank { getString(R.string.update_no_notes) }
 			val message = if (ready == null) notes else getString(R.string.update_cached, notes)
-			AlertDialog.Builder(this@MainActivity)
+			val dialog = AlertDialog.Builder(this@MainActivity)
 				.setTitle(getString(R.string.update_available, update.version))
 				.setMessage(message)
 				.setPositiveButton(if (ready == null) R.string.update_download else R.string.update_install) { _, _ ->
 					if (ready == null) downloadUpdate(update) else installUpdate(ready.file)
 				}
 				.setNegativeButton(R.string.update_later, null)
-				.show()
+				.apply {
+					if (sections.switchable) {
+						// The label is the language the button switches *to*. The listener
+						// is attached after show: the button's default action dismisses,
+						// and this one re-opens the offer in the other language instead.
+						setNeutralButton(if (showingChinese) R.string.notes_english else R.string.notes_chinese, null)
+					}
+				}
+				.create()
+			// A neutral button's default action is to dismiss; this one re-opens the
+			// same offer with the other half, so a wrong-language guess costs one tap.
+			dialog.setOnShowListener {
+				if (sections.switchable) {
+					dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+						dialog.dismiss()
+						showUpdate(update, !showingChinese)
+					}
+				}
+			}
+			dialog.show()
 		}
 	}
 

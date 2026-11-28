@@ -100,6 +100,12 @@ is downloaded only when **Download** is tapped, its SHA-256 (when the release re
 one) and signing certificate are checked against this install, and Android's own
 installer asks for confirmation.
 
+**A release's notes are bilingual, and the dialog knows it.** Releases carry an English
+half and a Chinese half in one body; the offer shows the half that matches the device's
+language, and when both are present the other language is one tap away on the button
+row. From `0.2.11`; before it the body was printed verbatim — English first, with the
+Chinese half usually beyond the dialog's 4 000-character cut — and there was no switch.
+
 **A downloaded APK is kept until it is installed**, and the offer knows it: a release
 that was downloaded and then dismissed at the installer is offered again as
 **Install** — the file is re-verified against this install's signature instead of being
@@ -280,6 +286,11 @@ adb install -r app\build\outputs\apk\release\app-release.apk
 从 `0.2.0` 起，应用启动时每天最多检查一次 GitHub Releases，标签栏里的同步按钮则立即检查。
 发现新版本会先给出说明；只有点 **Download** 才会下载，下载后用 SHA-256（发布里报了才校验）
 和签名证书与已安装版本比对，再交给 Android 系统安装器让用户确认。
+
+**发布说明是双语的，更新对话框知道这一点。** 每次发布都带着英文和中文两半；对话框按设备语言
+显示对应的一半，两种都有时另一门语言就在按钮行上、一次点击即可切换。`0.2.11` 起如此；在那
+之前整个正文被原样打印 —— 先是英文，中文那半通常已经在对话框 4 000 字的截断之外 —— 也没有
+切换按钮。
 
 **下载好的 APK 会一直留着，直到它被安装**，而且检查时知道这件事：已经下载、但在安装器里被
 取消的版本，下次会直接作为 **Install** 提供 —— 只会重新校验签名，不会再下载一遍。它会在

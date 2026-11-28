@@ -128,4 +128,7 @@
 	<string name="key_right">→</string>
 	<string name="terminal_copy">Copy</string>
 	<string name="terminal_paste">Paste</string>
+	<!-- the update dialog's language switch: the label is the language it switches to -->
+	<string name="notes_english">English</string>
+	<string name="notes_chinese">中文</string>
 </resources>
