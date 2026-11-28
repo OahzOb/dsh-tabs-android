@@ -2698,32 +2698,26 @@ class MainActivity : AppCompatActivity() {
 				.take(4000)
 				.ifBlank { getString(R.string.update_no_notes) }
 			val message = if (ready == null) notes else getString(R.string.update_cached, notes)
-			val dialog = AlertDialog.Builder(this@MainActivity)
+			// The switch is a real listener on the button. 0.2.11 attached it after the
+			// dialog was shown, and a tap could dismiss the offer instead of switching
+			// it; a builder listener cannot be bypassed that way.
+			var dialog: AlertDialog? = null
+			val builder = AlertDialog.Builder(this@MainActivity)
 				.setTitle(getString(R.string.update_available, update.version))
 				.setMessage(message)
 				.setPositiveButton(if (ready == null) R.string.update_download else R.string.update_install) { _, _ ->
 					if (ready == null) downloadUpdate(update) else installUpdate(ready.file)
 				}
 				.setNegativeButton(R.string.update_later, null)
-				.apply {
-					if (sections.switchable) {
-						// The label is the language the button switches *to*. The listener
-						// is attached after show: the button's default action dismisses,
-						// and this one re-opens the offer in the other language instead.
-						setNeutralButton(if (showingChinese) R.string.notes_english else R.string.notes_chinese, null)
-					}
-				}
-				.create()
-			// A neutral button's default action is to dismiss; this one re-opens the
-			// same offer with the other half, so a wrong-language guess costs one tap.
-			dialog.setOnShowListener {
-				if (sections.switchable) {
-					dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-						dialog.dismiss()
-						showUpdate(update, !showingChinese)
-					}
+			if (sections.switchable) {
+				// The label is the language the button switches *to*.
+				val switchTo = if (showingChinese) R.string.notes_english else R.string.notes_chinese
+				builder.setNeutralButton(switchTo) { _, _ ->
+					dialog?.dismiss()
+					showUpdate(update, !showingChinese)
 				}
 			}
+			dialog = builder.create()
 			dialog.show()
 		}
 	}
